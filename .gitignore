@@ -1,0 +1,14 @@
+.DS_Store
+__pycache__/
+*.pyc
+source/build/
+work/cache/
+work/research/
+work/airplay-port/build/
+work/airplay-port/logs/
+work/airplay-port/prefix/
+*.pkg
+*.zip
+*.pem
+*.key
+ps4-receiver-report*.json

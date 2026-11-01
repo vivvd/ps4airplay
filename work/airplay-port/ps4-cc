@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+: "${OO_PS4_TOOLCHAIN:?Set OO_PS4_TOOLCHAIN}"
+port_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+exec "${PS4_CLANG:-clang}" --target=x86_64-pc-freebsd12-elf -isysroot "$OO_PS4_TOOLCHAIN" -isystem "$OO_PS4_TOOLCHAIN/include" -I"$port_dir/compat" -fPIC "$@"
