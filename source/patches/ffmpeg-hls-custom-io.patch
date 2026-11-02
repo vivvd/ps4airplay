@@ -1,0 +1,10 @@
+--- a/libavformat/hls.c
++++ b/libavformat/hls.c
+@@ -665,2 +665,7 @@
++    /* PS4 native HTTP custom AVIO: no FFmpeg socket/TLS protocol is used. */
++    if (!proto_name && (s->flags & AVFMT_FLAG_CUSTOM_IO)) {
++        if (av_strstart(url, "https://", NULL)) proto_name = "https";
++        else if (av_strstart(url, "http://", NULL)) proto_name = "http";
++    }
+     if (!proto_name)
+         return AVERROR_INVALIDDATA;

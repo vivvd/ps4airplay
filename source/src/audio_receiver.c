@@ -301,13 +301,13 @@ int lab_airplay_start(LabState *s) {
     case 4: {
     if(np_start()!=0){lab_log(s,"Cover worker unavailable");return -1;}
     int direct_available=direct_start();
-    lab_log(s,"Direct AvPlayer module available: %d",direct_available);
+    lab_log(s,"Direct FFmpeg backend available: %d",direct_available);
     if(lab_video_start(s)!=0){lab_log(s,"Video worker initialization failed");return -1;}
     raop_callbacks_t cb;memset(&cb,0,sizeof(cb));
     cb.audio_process=process;cb.audio_get_format=format;cb.audio_flush=flush;
     cb.audio_set_metadata=metadata;cb.audio_set_coverart=coverart;cb.audio_set_progress=progress;
     cb.audio_stop_coverart_rendering=music_stop;
-    cb.on_video_play=direct_play;cb.on_video_play_fraction=direct_play_fraction;cb.on_video_scrub=direct_seek;
+    cb.on_protocol_trace=direct_protocol_trace;cb.on_video_protocol=direct_protocol;cb.on_video_play=direct_play;cb.on_video_play_fraction=direct_play_fraction;cb.on_video_scrub=direct_seek;
     cb.on_video_rate=direct_rate;cb.on_video_stop=direct_stop;cb.on_video_acquire_playback_info=direct_info;cb.on_video_playlist_remove=direct_remove;
     cb.audio_set_volume=volume;cb.audio_set_client_volume=initial_volume;
     cb.conn_init=noop;cb.conn_destroy=flush;cb.conn_reset=reset;cb.conn_feedback=noop;
@@ -373,14 +373,17 @@ void lab_airplay_poll(LabState *s) {
     pthread_mutex_unlock(&receiver.mutex);
 }
 void lab_airplay_stop(void) {
-    if(startup_phase==0)return;
     if(receiver.dns){dnssd_unregister_raop(receiver.dns);dnssd_unregister_airplay(receiver.dns);}
+    /* Quiesce callbacks first; cancel/join the player while its HTTP core and
+     * FCUP playlists still exist. Only then free protocol/session storage. */
+    if(receiver.raop)raop_stop_httpd(receiver.raop);
+    direct_shutdown();
     if(receiver.raop){raop_destroy(receiver.raop);receiver.raop=NULL;}
     pthread_mutex_lock(&receiver.mutex);receiver.running=0;pthread_mutex_unlock(&receiver.mutex);
-    if(receiver.worker_started)pthread_join(receiver.worker,NULL);
+    if(receiver.worker_started){pthread_join(receiver.worker,NULL);receiver.worker_started=0;}
     if(receiver.dns){dnssd_destroy(receiver.dns);receiver.dns=NULL;}
     decoder_close();
-    direct_shutdown();
     np_shutdown();
     lab_video_stop();
+    startup_phase=0;
 }

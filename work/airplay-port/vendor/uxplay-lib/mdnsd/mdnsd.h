@@ -19,7 +19,8 @@
 
 #define MDNSD_MAX_NAME 256
 #define MDNSD_TXT_MAX 512
-#define MDNSD_TTL_SERVICE 4500
+#define MDNSD_TTL_SERVICE 15
+#define MDNSD_REFRESH_SECONDS 5
 
 typedef struct {
     unsigned char bytes[MDNSD_TXT_MAX];

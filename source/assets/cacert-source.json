@@ -1,0 +1,8 @@
+{
+  "source": "https://curl.se/ca/cacert.pem",
+  "upstream_data": "Mozilla CA root certificates, 2026-10-20",
+  "sha256": "796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe",
+  "certificates": 118,
+  "license": "Mozilla Public License 2.0",
+  "purpose": "Public roots for verified HTTPS; no OS/user certificate store is imported."
+}

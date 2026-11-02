@@ -82,6 +82,15 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertIn('log', json.loads(body))
         self.assertEqual(int(fields['Content-Length']), len(body))
 
+    def test_language_switch_updates_app_status(self):
+        for language in ('ru', 'en'):
+            status, _, _ = self.request('POST', '/api/language/' + language)
+            self.assertEqual(status, 202)
+            _, _, body = self.request('GET', '/api/status')
+            self.assertEqual(json.loads(body)['language'], language)
+        status, _, _ = self.request('POST', '/api/language/fr')
+        self.assertEqual(status, 404)
+
     def test_commands_and_reconnect(self):
         for command, expected in [('pattern', True), ('reset', False)]:
             self.assertEqual(self.request('POST', '/api/' + command)[0], 202)
@@ -112,6 +121,20 @@ class DiagnosticsTest(unittest.TestCase):
         self.assertEqual(self.request('POST','/api/video-profile/720p30',{'Origin':'https://example.invalid'})[0],403)
         self.assertEqual(self.request('GET','/api/video-profile/720p30')[0],404)
         self.assertEqual(self.request('POST','/api/video-profile/1080p30')[0],202)
+
+    def test_embedded_video_and_ranges(self):
+        expected=(ROOT/'assets/airplay-test.mp4').read_bytes()
+        status,fields,body=self.request('GET','/test-video.mp4')
+        self.assertEqual(status,200);self.assertEqual(body,expected)
+        self.assertEqual(fields.get("Cache-Control"),"no-store")
+        self.assertEqual(self.request("GET","/test-video.mp4?v=1.11-RC12")[2],expected)
+        for value,start,end in [('bytes=0-31',0,32),('bytes=32-',32,len(expected)),('bytes=-16',len(expected)-16,len(expected))]:
+            status,fields,body=self.request('GET','/test-video.mp4',{'Range':value})
+            self.assertEqual(status,206);self.assertEqual(body,expected[start:end]);self.assertIn('Content-Range',fields)
+        self.assertEqual(self.request('GET','/test-video.mp4',{'Range':'bytes=999999-'})[0],416)
+        self.assertEqual(self.request('GET','/test-video.mp4',{'Range':'bytes=0-1,3-4'})[0],416)
+        status,fields,body=self.request('HEAD','/test-video.mp4')
+        self.assertEqual(status,200);self.assertEqual(body,b'');self.assertEqual(int(fields['Content-Length']),len(expected))
 
     def test_cross_origin_command_rejected(self):
         self.assertEqual(self.request('POST', '/api/tone', {'Origin': 'https://example.invalid'})[0], 403)

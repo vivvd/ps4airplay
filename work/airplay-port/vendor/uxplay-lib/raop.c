@@ -29,6 +29,8 @@
 #include "netutils.h"
 #include "logger.h"
 #include "compat.h"
+#include "fp_control.h"
+#include <openssl/crypto.h>
 #include "raop_rtp_mirror.h"
 #include "raop_ntp.h"
 
@@ -106,6 +108,8 @@ struct raop_conn_s {
     raop_rtp_t *raop_rtp;
     raop_rtp_mirror_t *raop_rtp_mirror;
     fairplay_t *fairplay;
+    fp_control_t *control;
+    int control_pending,control_active,control_mix;
     pairing_session_t *session;
   
     unsigned char *local;
@@ -156,6 +160,7 @@ conn_init(void *opaque, unsigned char *local, int locallen, unsigned char *remot
     lab_session_trace("connection","pairing session init returned");
     if (!conn->session) {
         fairplay_destroy(conn->fairplay);
+    fp_control_free(conn->control);
         free(conn);
         return NULL;
     }
@@ -193,6 +198,18 @@ conn_init(void *opaque, unsigned char *local, int locallen, unsigned char *remot
     return conn;
 }
 
+/* Diagnostic labels are an allowlist: never expose URLs, UUIDs or headers. */
+static void protocol_trace(raop_t *raop,const char *method,const char *url,const char *protocol,int status) {
+    if (!raop->callbacks.on_protocol_trace) return;
+    const char *methods[]={"GET","POST","PUT","OPTIONS","SETUP","RECORD","TEARDOWN","FLUSH","GET_PARAMETER","SET_PARAMETER"};
+    const char *routes[]={"/server-info","/info","/pair-pin-start","/pair-setup-pin","/pair-setup","/pair-verify","/fp-setup","/fp-setup2","/auth-setup","/reverse","/play","/action","/playback-info","/stop","/feedback","/scrub","/rate","/setProperty","/getProperty"};
+    const char *m="other",*r="other",*p=!strcmp(protocol,"RTSP/1.0")?"RTSP":!strncmp(protocol,"HTTP/1.",7)?"HTTP":"other";
+    for(size_t i=0;i<sizeof(methods)/sizeof(*methods);++i)if(!strcmp(method,methods[i]))m=methods[i];
+    for(size_t i=0;i<sizeof(routes)/sizeof(*routes);++i){size_t n=strlen(routes[i]);if(!strncmp(url,routes[i],n) && (!url[n] || url[n]=='?'))r=routes[i];}
+    char line[112];snprintf(line,sizeof(line),"%s %s %s -> %d",p,m,r,status);
+    raop->callbacks.on_protocol_trace(raop->callbacks.cls,line);
+}
+
 static void
 conn_request(void *ptr, http_request_t *request, http_response_t **response) {
     char *response_data = NULL;
@@ -222,6 +239,8 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
     const char *method = http_request_get_method(request);
     const char *url = http_request_get_url(request);
     const char *protocol = http_request_get_protocol(request);
+    const char *pd=http_request_get_header(request,"X-Apple-PD");
+    if(url && !strcmp(url,"/pair-verify") && pd && !strcmp(pd,"1"))conn->control_mix=1;
 
     if (!method  || !url || !protocol) {
         return;
@@ -240,6 +259,8 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
                    num_fields, (int) max_field_len, (int) max_value_len);
         *response = http_response_create();
         http_response_init(*response, protocol, 431, "Request Header Fields Too Large");
+        protocol_trace(raop,method,url,protocol,431);
+        http_response_finish(*response,NULL,0);
         return;
     }
 
@@ -251,7 +272,9 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
         int cseq_val = parse_int(cseq_req);
         if (cseq_val < 0) {
             logger_log(raop->logger, LOGGER_ERR, "rejecting request with invalid CSeq value %s", cseq_req);
-            return;   //CSeq header field had invalid value
+            *response=http_response_create();http_response_init(*response,protocol,400,"Invalid CSeq");
+            protocol_trace(raop,method,url,protocol,400);http_response_finish(*response,NULL,0);
+            return;
         }
         snprintf(cseq_buf, sizeof(cseq_buf), "%u", (unsigned int) cseq_val);
         cseq = cseq_buf;
@@ -273,11 +296,13 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
     const char *client_session_id = http_request_get_header(request, "X-Apple-Session-ID");
     const char *host = http_request_get_header(request, "Host");
     hls_request = (host && !cseq && !client_session_id && !strcmp(method,"GET") &&
-                   conn->remotelen==4 && conn->remote[0]==127);
-    if(!cseq && !hls_request && !client_session_id)client_session_id="00000000-0000-4000-8000-000000000001";
+                   conn->remotelen==4 && conn->remote[0]==127 &&
+                   strcmp(url,"/server-info") && strcmp(url,"/playback-info") && strcmp(url,"/info") && strcmp(url,"/scrub"));
+    /* Discovery has no session ID. Bind only the first real ID supplied by
+     * the client, rather than inventing an ID that rejects its next request. */
 
     if (conn->connection_type == CONNECTION_TYPE_UNKNOWN) {
-        if (cseq || ble) {
+        if ((cseq && !strcmp(protocol,"RTSP/1.0")) || ble) {
             if (httpd_count_connection_type(raop->httpd, CONNECTION_TYPE_RAOP)) {
                 char ipaddr[40] = { '\0' };
                 utils_ipaddress_to_string(conn->remotelen, conn->remote, conn->zone_id, ipaddr, (int) (sizeof(ipaddr)));
@@ -297,13 +322,11 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
             logger_log(raop->logger, LOGGER_DEBUG, "New connection %p identified as Connection type RAOP", ptr);
             httpd_set_connection_type(raop->httpd, ptr, CONNECTION_TYPE_RAOP);
             conn->connection_type = CONNECTION_TYPE_RAOP;
-        } else if (client_session_id) {
+        } else if (!hls_request && (!strcmp(protocol,"HTTP/1.1") || !strcmp(protocol,"HTTP/1.0"))) {
             logger_log(raop->logger, LOGGER_DEBUG, "New connection %p identified as Connection type AirPlay", ptr);            
             httpd_set_connection_type(raop->httpd, ptr, CONNECTION_TYPE_AIRPLAY);
             conn->connection_type = CONNECTION_TYPE_AIRPLAY;
-            conn->client_session_id = (char *) calloc(strlen(client_session_id) + 1, sizeof(char));
-            assert(conn->client_session_id);
-            memcpy(conn->client_session_id, client_session_id, strlen(client_session_id));
+            /* Session binding happens below after discovery. */
             /* airplay video has been requested: shut down any running RAOP udp services */
             raop_conn_t *raop_conn = (raop_conn_t *) httpd_get_connection_by_type(raop->httpd, CONNECTION_TYPE_RAOP, 1);
             if (raop_conn) {
@@ -404,12 +427,20 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
         free(header_str);
     }
     
-    if(client_session_id && (!conn->client_session_id || strcmp(client_session_id,conn->client_session_id))){
+    if(client_session_id && conn->client_session_id && strcmp(client_session_id,conn->client_session_id)){
         http_response_init(*response,protocol,400,"Session changed");
         http_response_set_disconnect(*response,1);goto finish;
     }
 
+    if(client_session_id && !conn->client_session_id){
+        conn->client_session_id=strdup(client_session_id);
+        if(!conn->client_session_id){http_response_init(*response,protocol,500,"Allocation failed");goto finish;}
+    }
     logger_log(raop->logger, LOGGER_DEBUG, "Handling request %s with URL %s", method, url);
+    if(raop->callbacks.on_video_protocol){
+        int event=!strcmp(url,"/play")?1:!strcmp(url,"/reverse")?3:!strcmp(url,"/action")?4:!strcmp(url,"/server-info")?5:0;
+        if(event)raop->callbacks.on_video_protocol(raop->callbacks.cls,event);
+    }
     raop_handler_t handler = NULL;
     if (!hls_request && !strcmp(protocol, "RTSP/1.0")) {
         if (!strcmp(method, "POST")) {
@@ -450,15 +481,18 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
         } else {
             http_response_init(*response, protocol, 501, "Not Implemented");
         }
-    } else if (!hls_request && !strcmp(protocol, "HTTP/1.1")) {
+    } else if (!hls_request && (!strcmp(protocol, "HTTP/1.1") || !strcmp(protocol,"HTTP/1.0"))) {
         if (!strcmp(method, "POST")) {
-            if (!strcmp(url, "/reverse")) {
+            if (!strcmp(url, "/fp-setup")) {
+                /* Safari negotiates this on HTTP, while mirroring uses RTSP. */
+                handler = &raop_handler_fpsetup;
+            } else if (!strcmp(url, "/reverse")) {
                 handler = &http_handler_reverse;
             } else if (!strcmp(url, "/play")) {
                 handler = &http_handler_play;
             } else if (!strncmp (url, "/getProperty?", strlen("/getProperty?"))) {
                 handler = &http_handler_get_property;
-            } else if (!strncmp(url, "/scrub?", strlen("/scrub?"))) {
+            } else if (!strcmp(url,"/scrub") || !strncmp(url, "/scrub?", strlen("/scrub?"))) {
                 handler = &http_handler_scrub;
             } else if (!strncmp(url, "/rate?", strlen("/rate?"))) {
                 handler = &http_handler_rate;
@@ -473,6 +507,8 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
             if (!strcmp(url, "/server-info")) {
                 raop->hls_pending = true;
                 handler = &http_handler_server_info;
+            } else if (!strcmp(url,"/scrub")) {
+                handler = &http_handler_scrub;
             } else if (!strcmp(url, "/playback-info")) {
                 handler = &http_handler_playback_info;
             }
@@ -499,6 +535,7 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
             http_response_add_header(*response, "CSeq", cseq);
         }
     }
+    protocol_trace(raop,method,url,protocol,http_response_get_status(*response));
     http_response_finish(*response, response_data, response_datalen);
     int len = 0;
     const char *data = http_response_get_data(*response, &len);
@@ -553,6 +590,24 @@ conn_request(void *ptr, http_request_t *request, http_response_t **response) {
     }
 }
 
+static int conn_read(void *ptr,int fd,void *out,size_t capacity){
+    raop_conn_t *conn=ptr;
+    int n=conn->control_active?fp_control_read(conn->control,fd,out,capacity):(int)recv(fd,out,capacity>1024?1024:capacity,0);
+    if(n<0 && errno!=EAGAIN && errno!=EINTR && conn->control_active && conn->raop->callbacks.on_protocol_trace)
+        conn->raop->callbacks.on_protocol_trace(conn->raop->callbacks.cls,"FP control: receive failed; connection closed");
+    return n;
+}
+static int conn_write(void *ptr,int fd,const void *data,size_t length){
+    raop_conn_t *conn=ptr;
+    return conn->control_active?fp_control_write(conn->control,fd,data,length):(int)send(fd,data,length,0);
+}
+static void conn_response_sent(void *ptr){
+    raop_conn_t *conn=ptr;
+    if(conn->control_pending){conn->control_pending=0;conn->control_active=1;
+        if(conn->raop->callbacks.on_protocol_trace)conn->raop->callbacks.on_protocol_trace(conn->raop->callbacks.cls,"FP control: encrypted connection active");
+    }
+}
+
 static void
 conn_destroy(void *ptr) {
     raop_conn_t *conn = ptr;
@@ -583,6 +638,7 @@ conn_destroy(void *ptr) {
     free(conn->remote);
     pairing_session_destroy(conn->session);
     fairplay_destroy(conn->fairplay);
+    fp_control_free(conn->control);
     if (conn->client_session_id) {
         free(conn->client_session_id);
     }
@@ -691,6 +747,7 @@ raop_init2(raop_t *raop, int nohold, const char *device_id, const char *keyfile)
     httpd_cbs.conn_init = &conn_init;
     httpd_cbs.conn_request = &conn_request;
     httpd_cbs.conn_destroy = &conn_destroy;
+    httpd_cbs.conn_read=conn_read;httpd_cbs.conn_write=conn_write;httpd_cbs.conn_response_sent=conn_response_sent;
 
     /* Initialize the http daemon, (this will take a copy of httpd_cbs) */
     httpd = httpd_init(raop->logger, &httpd_cbs, nohold);
@@ -708,8 +765,8 @@ raop_init2(raop_t *raop, int nohold, const char *device_id, const char *keyfile)
 void
 raop_destroy(raop_t *raop) {
     if (raop) {
-        raop_destroy_airplay_video(raop, -1);
         raop_stop_httpd(raop);
+        raop_destroy_airplay_video(raop, -1);
         pairing_destroy(raop->pairing);
         httpd_destroy(raop->httpd);
         logger_destroy(raop->logger);
@@ -848,7 +905,7 @@ raop_start_httpd(raop_t *raop, unsigned short *port) {
 void
 raop_stop_httpd(raop_t *raop) {
     assert(raop);
-    httpd_stop(raop->httpd);
+    if(raop->httpd)httpd_stop(raop->httpd);
 }
 
 void raop_remove_known_connections(raop_t * raop) {

@@ -23,6 +23,7 @@
 #include <errno.h>
 
 #include "httpd.h"
+#include "fp_control.h"
 #include "ps4_trace.h"
 #include "netutils.h"
 #include "http_request.h"
@@ -71,6 +72,18 @@ struct httpd_s {
 const char *
 httpd_get_connection_typename (connection_type_t type) {
   return typename[type];
+}
+
+int httpd_send(httpd_t *httpd,int fd,const void *data,size_t length){
+    http_connection_t *connection=NULL;
+    for(int i=0;i<httpd->max_connections;++i)if(httpd->connections[i].connected && httpd->connections[i].socket_fd==fd){connection=&httpd->connections[i];break;}
+    if(!connection)return -1;
+    size_t written=0;
+    while(written<length){
+        int n=httpd->callbacks.conn_write?httpd->callbacks.conn_write(connection->user_data,fd,(const char *)data+written,length-written):(int)send(fd,(const char *)data+written,length-written,0);
+        if(n<0 && errno==EINTR)continue;if(n<=0){connection->pending_remove=1;return -1;}written+=(size_t)n;
+    }
+    return (int)written;
 }
 
 int
@@ -366,7 +379,8 @@ static THREAD_RETVAL
 httpd_thread(void *arg)
 {
     httpd_t *httpd = arg;
-    char buffer[1024];
+    char *buffer=malloc(FP_CONTROL_MAX);
+    if(!buffer)return NULL;
     int timeout_limit = 60; //drop connection after 60 secs of silence
 
     bool logger_debug = (logger_get_level(httpd->logger) >= LOGGER_DEBUG);
@@ -500,7 +514,7 @@ httpd_thread(void *arg)
                 logger_log(httpd->logger, LOGGER_DEBUG, " ");
             }
 
-            int ret = (int) recv(connection->socket_fd, buffer, sizeof(buffer), 0);
+            int ret = httpd->callbacks.conn_read?httpd->callbacks.conn_read(connection->user_data,connection->socket_fd,buffer,FP_CONTROL_MAX):(int)recv(connection->socket_fd,buffer,1024,0);
             if (ret == 0) {
                 httpd_remove_connection(httpd, connection, 0);
                 continue;
@@ -591,15 +605,11 @@ httpd_thread(void *arg)
                         is_upgrade_response = true;
                     }
 
-                    int written = 0;
-                    while (written < datalen) {
-                        int ret = send(connection->socket_fd, data + written, datalen - written, 0);
-                        if (ret == -1) {
-                            logger_log(httpd->logger, LOGGER_ERR, "httpd error in sending data");
-                            break;
-                        }
-                        written += ret;
+                    int written=httpd_send(httpd,connection->socket_fd,data,(size_t)datalen);
+                    if(written!=datalen){
+                        http_response_destroy(response);httpd_remove_connection(httpd,connection,0);continue;
                     }
+                    if(httpd->callbacks.conn_response_sent)httpd->callbacks.conn_response_sent(connection->user_data);
 
                     if (is_upgrade_response){
                         if (http_request_upgrade_data(connection->request) == 0) {
@@ -633,6 +643,7 @@ httpd_thread(void *arg)
         }
     }
 
+    free(buffer);
     /* Remove all connections that are still connected */
     for (int i = 0; i < httpd->max_connections; i++) {
         http_connection_t *connection = &httpd->connections[i];
@@ -747,7 +758,7 @@ httpd_stop(httpd_t *httpd)
     assert(httpd);
 
     MUTEX_LOCK(httpd->run_mutex);
-    if (!httpd->running || httpd->joined) {
+    if (httpd->joined) {
         MUTEX_UNLOCK(httpd->run_mutex);
         return;
     }

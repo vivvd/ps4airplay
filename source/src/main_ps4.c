@@ -13,6 +13,7 @@
 #include <orbis/Pad.h>
 #include <orbis/NetCtl.h>
 #include <orbis/Net.h>
+#include <orbis/SystemService.h>
 #include <orbis/UserService.h>
 
 typedef struct {
@@ -159,6 +160,7 @@ int main(void) {
         lab_video_poll(&s);
         np_poll(&s);direct_poll(&s);
         lab_server_poll(&s);
+        if(s.pending_direct_test){int mode=s.pending_direct_test;s.pending_direct_test=0;if(s.direct_available)direct_test(mode);else lab_log(&s,"Direct video module unavailable");}
         if(s.pending_airplay_step && s.frames>=30){
             s.pending_airplay_step=0;int startup_rc=-1;
             if(!s.recovery_mode || lab_session_trace_begin()==0){
@@ -173,17 +175,29 @@ int main(void) {
             if (read_rc == 0 && data.connected) {
                 unsigned pressed = data.buttons & ~previous_buttons;
                 previous_buttons = data.buttons;
+                if (pressed & ORBIS_PAD_BUTTON_OPTIONS) {s.settings_open=!s.settings_open;s.settings_item=0;}
+                else if(s.settings_open){
+                    if(pressed & ORBIS_PAD_BUTTON_UP)s.settings_item=(s.settings_item+2)%3;
+                    if(pressed & ORBIS_PAD_BUTTON_DOWN)s.settings_item=(s.settings_item+1)%3;
+                    if(pressed & ORBIS_PAD_BUTTON_CIRCLE)s.settings_open=0;
+                    if(pressed & ORBIS_PAD_BUTTON_CROSS){
+                        if(s.settings_item==0)s.language=!s.language;
+                        else if(s.settings_item==1)s.settings_open=0;
+                        else running=0;
+                    }
+                }else{
                 if (pressed & ORBIS_PAD_BUTTON_CROSS) {playback_info_t info={0};direct_info(NULL,&info);if(s.direct_active)direct_rate(NULL,info.rate>0?0:1);}
                 if ((pressed & ORBIS_PAD_BUTTON_TRIANGLE) && s.show_status) s.pattern = 1;
                 if (pressed & ORBIS_PAD_BUTTON_CIRCLE) {s.pattern=0;direct_stop(NULL);}
                 if (pressed & ORBIS_PAD_BUTTON_SQUARE) {s.pattern=0;s.show_status=!s.show_status;}
-                if (pressed & ORBIS_PAD_BUTTON_OPTIONS) running = 0;
+                }
             } else previous_buttons = 0;
         }
         if (s.pending_tone) tone(&s);
         if (s.video_rc == 0) {
             int index = (int)(s.frames % 2);
-            if(s.show_status || s.pattern){lab_render(&s,display.buffers[index]);direct_invalidate();lab_video_invalidate_output();player_ui_invalidate();}
+            if(s.settings_open){player_ui_draw(&s,display.buffers[index]);direct_invalidate();lab_video_invalidate_output();}
+            else if(s.show_status || s.pattern){lab_render(&s,display.buffers[index]);direct_invalidate();lab_video_invalidate_output();player_ui_invalidate();}
             else if(direct_draw(display.buffers[index])){lab_video_invalidate_output();player_ui_invalidate();}
             else if(!s.direct_active && lab_video_draw(display.buffers[index]))player_ui_invalidate();
             else {player_ui_draw(&s,display.buffers[index]);lab_video_invalidate_output();}
@@ -193,12 +207,16 @@ int main(void) {
         ++s.frames;
         if (s.frames % 600 == 0) network_info(&s);
     }
+    lab_session_trace("shutdown","begin");
     lab_airplay_stop();
+    lab_session_trace("shutdown","AirPlay stopped");
     lab_server_stop();
     player_ui_shutdown();
     if (pad >= 0) scePadClose(pad);
     display_close(&display);
-    lab_session_trace("session","clean stop");
     lab_hen_close(&s);
+    lab_session_trace("session","clean stop");
+    /* Ask the shell to close this title instead of returning through the CRT. */
+    sceSystemServiceLoadExec("exit",NULL);
     return 0;
 }

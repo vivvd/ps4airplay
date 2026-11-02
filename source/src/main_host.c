@@ -41,6 +41,7 @@ int main(int argc, char **argv) {
     if (lab_server_start(&s, "127.0.0.1", port)) return 1;
     while (running) {
         lab_server_poll(&s);
+        if(s.pending_direct_test){s.pending_direct_test=0;lab_log(&s,"Direct video test: PS4 hardware required");}
         if(s.pending_airplay_step){s.pending_airplay_step=0;lab_log(&s,"Host: AirPlay step not executed; PS4 hardware required");}
         if (s.pending_tone) {
             s.pending_tone = 0;

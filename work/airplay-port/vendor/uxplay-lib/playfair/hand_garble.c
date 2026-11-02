@@ -263,7 +263,7 @@ void garble(unsigned char* buffer0, unsigned char* buffer1, unsigned char* buffe
    D = ((((buffer3[0]/3) - (buffer3[64]|buffer1[22]))) ^ (buffer3[28] + 62) ^ ((B|C)));
    T = buffer0[(D & 0xff) % 20];
 
-   buffer3[68] = (buffer0[buffer1[99] % 20] * buffer0[buffer1[99] % 20] * buffer0[buffer1[99] % 20] * buffer0[buffer1[99] % 20]) | buffer2[buffer3[64] % 35];
+   buffer3[68] = ((uint32_t)buffer0[buffer1[99] % 20] * buffer0[buffer1[99] % 20] * buffer0[buffer1[99] % 20] * buffer0[buffer1[99] % 20]) | buffer2[buffer3[64] % 35];
    printf("buffer3[68] = %02x\n", buffer3[68]);
 
    U = buffer0[buffer1[50] % 20]; // this is also v100

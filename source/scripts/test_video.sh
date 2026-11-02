@@ -2,7 +2,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 video_base="${PS4_AIRPLAY_PORT:-$PWD/../work/airplay-port}"
-video_host="$video_base/build/ffmpeg-video-fast-host"
+video_host="${PS4_HOST_FFMPEG:-$video_base/build/ffmpeg-video-fast-host}"
 mkdir -p build
 ${CC:-cc} -std=c11 -D_DEFAULT_SOURCE -D_DARWIN_C_SOURCE -Wall -Wextra -Werror \
   -fsanitize=address,undefined -g -O1 -Iinclude \

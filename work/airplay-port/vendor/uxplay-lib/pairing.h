@@ -48,6 +48,7 @@ int pairing_session_get_public_key(pairing_session_t *session, unsigned char ecd
 int random_pin();
 int pairing_session_get_signature(pairing_session_t *session, unsigned char signature[PAIRING_SIG_SIZE]);
 int pairing_session_finish(pairing_session_t *session, const unsigned char signature[PAIRING_SIG_SIZE]);
+int pairing_session_verified(pairing_session_t *session);
 void pairing_session_destroy(pairing_session_t *session);
 
 void pairing_destroy(pairing_t *pairing);

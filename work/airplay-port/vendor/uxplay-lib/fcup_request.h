@@ -91,7 +91,7 @@ int fcup_request(void *conn_opaque, const char *media_url, const char *client_se
     free(plist_xml);
 
     const char *http_request = http_response_get_data(request, &requestlen); 
-    int send_len = send(socket_fd, http_request, requestlen, 0);
+    int send_len = httpd_send(raop->httpd,socket_fd,http_request,(size_t)requestlen);
     if (send_len < 0) {
         int sock_err = SOCKET_GET_ERROR();
 	logger_log(raop->logger, LOGGER_ERR, "fcup_request: send  error %d:%s\n",

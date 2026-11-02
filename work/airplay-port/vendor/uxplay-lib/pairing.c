@@ -670,3 +670,5 @@ void ed25519_pk_to_base64(const unsigned char *pk, char  **pk64) {
     *pk64 = (char *) calloc(len64, sizeof(char));
     pk_to_base64(pk, ED25519_KEY_SIZE, *pk64, len64);
 }
+
+int pairing_session_verified(pairing_session_t *session){return session->status==STATUS_FINISHED;}

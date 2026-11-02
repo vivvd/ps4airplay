@@ -25,5 +25,16 @@ int main(int argc,char **argv){
     /* Cached draw must restore a target invalidated by video/diagnostics. */
     uint32_t expected=pixels[220*LAB_WIDTH+200];pixels[220*LAB_WIDTH+200]=0;player_ui_invalidate();player_ui_draw(&state,pixels);assert(pixels[220*LAB_WIDTH+200]==expected);
     np_stop();np_snapshot(&value,NULL,&revision);assert(!value.active);player_ui_draw(&state,pixels);
+    /* Menu/language transitions must invalidate cached idle and music screens. */
+    state.settings_open=1;player_ui_draw(&state,pixels);
+    unsigned long en=0,ru=0,menu=0;
+    for(int i=0;i<LAB_WIDTH*LAB_HEIGHT;++i)en+=pixels[i];
+    state.language=1;player_ui_draw(&state,pixels);
+    for(int i=0;i<LAB_WIDTH*LAB_HEIGHT;++i)ru+=pixels[i];
+    assert(en!=ru);
+    state.settings_item=2;player_ui_draw(&state,pixels);
+    for(int i=0;i<LAB_WIDTH*LAB_HEIGHT;++i)menu+=pixels[i];
+    assert(menu!=ru);
+    state.settings_open=0;player_ui_draw(&state,pixels);
     player_ui_shutdown();np_shutdown();free(pixels);puts("NowPlaying: DMAP/UTF8, malformed lengths, async JPEG, RTP wrap/progress, UI cache passed");return 0;
 }

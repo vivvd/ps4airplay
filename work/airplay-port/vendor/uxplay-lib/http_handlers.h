@@ -17,6 +17,7 @@
 /* this file is part of raop.c and should not be included in any other file */
 
 #include "airplay_video.h"
+#include <math.h>
 #include "fcup_request.h"
 
 static void
@@ -111,7 +112,18 @@ http_handler_scrub(raop_conn_t *conn, http_request_t *request, http_response_t *
                    char **response_data, int *response_datalen) {
     raop_t *raop = conn->raop;
     const char *url = http_request_get_url(request);
+    if(!strcmp(http_request_get_method(request),"GET")){
+        playback_info_t info={0};raop->callbacks.on_video_acquire_playback_info(raop->callbacks.cls,&info);
+        double duration=isfinite(info.duration) && info.duration>0?info.duration:0;
+        double position=isfinite(info.position) && info.position>0?info.position:0;
+        char text[128];int n=snprintf(text,sizeof(text),"duration: %.6f\r\nposition: %.6f\r\n",duration,position);
+        if(n<0 || (size_t)n>=sizeof(text)){http_response_init(response,"HTTP/1.1",500,"Invalid playback time");return;}
+        *response_data=malloc((size_t)n+1);if(!*response_data){http_response_init(response,"HTTP/1.1",500,"Allocation failed");return;}
+        memcpy(*response_data,text,(size_t)n+1);*response_datalen=n;
+        http_response_add_header(response,"Content-Type","text/parameters");return;
+    }
     const char *data = strstr(url, "?");
+    if(!data){http_response_init(response,"HTTP/1.1",400,"Missing position");return;}
     float scrub_position = 0.0f;
     if (data) {
         data++;
@@ -225,18 +237,29 @@ http_handler_get_property(raop_conn_t *conn, http_request_t *request, http_respo
     logger_log(raop->logger, LOGGER_DEBUG, "http_handler_get_property: %s (unhandled)", property);
 }
 
-/* this request (for a variant FairPlay decryption)  cannot be handled  by UxPlay */
+/* Upgrade only after a completed SAP exchange and authenticated envelope.
+ * The acknowledgement remains plaintext; later commands and responses use GCM. */
 static void
-http_handler_fpsetup2(raop_conn_t *conn, http_request_t *request, http_response_t *response,
-                      char **response_data, int *response_datalen) {
-    raop_t *raop = conn->raop;
-    logger_log(raop->logger, LOGGER_WARNING, "client HTTP request POST fp-setup2 is unhandled");
-    http_response_add_header(response, "Content-Type", "application/x-apple-binary-plist");
-    int req_datalen = 0;
-    const unsigned char *req_data = (unsigned char *) http_request_get_data(request, &req_datalen);
-    logger_log(raop->logger, LOGGER_ERR, "only FairPlay version 0x03 is implemented, version is 0x%2.2x",
-               req_data[4]);
-    http_response_init(response, "HTTP/1.1", 421, "Misdirected Request");
+http_handler_fpsetup2(raop_conn_t *conn,http_request_t *request,http_response_t *response,
+                     char **response_data,int *response_datalen){
+    (void)response_data;(void)response_datalen;
+    int size=0;const unsigned char *body=(const unsigned char *)http_request_get_data(request,&size);
+    unsigned char material[64]={0},secret[32]={0};const char *protocol=http_request_get_protocol(request);
+    int mix=conn->control_mix;
+    const char *pd=http_request_get_header(request,"X-Apple-PD");if(pd && !strcmp(pd,"1"))mix=1;
+    if(conn->raop->callbacks.on_protocol_trace){char label[112];snprintf(label,sizeof(label),"FP control setup: bytes=%d mixed=%d verified=%d",size,mix,pairing_session_verified(conn->session));conn->raop->callbacks.on_protocol_trace(conn->raop->callbacks.cls,label);}
+    int status=403;const char *reason="Invalid control setup";
+    if(conn->control || conn->control_active || size!=120 || !body)goto fail;
+    if(mix && (!pairing_session_verified(conn->session) || !pairing_get_ecdh_secret_key(conn->session,secret)))goto fail;
+    if(fairplay_control_material(conn->fairplay,body,material))goto fail;
+    conn->control=fp_control_new(material,mix?secret:NULL);
+    if(!conn->control){status=500;reason="Allocation failed";goto fail;}
+    conn->control_pending=1;
+    http_response_add_header(response,"Content-Type","application/octet-stream");
+    OPENSSL_cleanse(material,sizeof(material));OPENSSL_cleanse(secret,sizeof(secret));return;
+fail:
+    OPENSSL_cleanse(material,sizeof(material));OPENSSL_cleanse(secret,sizeof(secret));
+    http_response_init(response,protocol,status,reason);http_response_set_disconnect(response,1);
 }
 
 // called by http_handler_playback_info while preparing response to a GET /playback_info request from the client.
@@ -274,17 +297,17 @@ int create_playback_info_plist_xml(playback_info_t *playback_info, char **plist_
     plist_t rate_node = plist_new_real(playback_info->rate);
     plist_dict_set_item(res_root_node, "rate", rate_node);
 
-    /* should these be int or bool? */
-    plist_t ready_to_play_node = plist_new_uint(playback_info->ready_to_play);
+    /* AirPlay status flags are plist booleans, not integer nodes. */
+    plist_t ready_to_play_node = plist_new_bool(playback_info->ready_to_play);
     plist_dict_set_item(res_root_node, "readyToPlay", ready_to_play_node);
 
-    plist_t playback_buffer_empty_node = plist_new_uint(playback_info->playback_buffer_empty);
+    plist_t playback_buffer_empty_node = plist_new_bool(playback_info->playback_buffer_empty);
     plist_dict_set_item(res_root_node, "playbackBufferEmpty", playback_buffer_empty_node);
 
-    plist_t playback_buffer_full_node = plist_new_uint(playback_info->playback_buffer_full);
+    plist_t playback_buffer_full_node = plist_new_bool(playback_info->playback_buffer_full);
     plist_dict_set_item(res_root_node, "playbackBufferFull", playback_buffer_full_node);
 
-    plist_t playback_likely_to_keep_up_node = plist_new_uint(playback_info->playback_likely_to_keep_up);
+    plist_t playback_likely_to_keep_up_node = plist_new_bool(playback_info->playback_likely_to_keep_up);
     plist_dict_set_item(res_root_node, "playbackLikelyToKeepUp", playback_likely_to_keep_up_node);
 
     plist_t loaded_time_ranges_node = plist_new_array();
@@ -317,7 +340,7 @@ http_handler_playback_info(raop_conn_t *conn, http_request_t *request, http_resp
 {
     raop_t *raop = conn->raop;
     //const char *session_id = http_request_get_header(request, "X-Apple-Session-ID");
-    playback_info_t playback_info;
+    playback_info_t playback_info = {0};
 
     playback_info.stallcount = 0;
     //playback_info.playback_buffer_empty = false;   // maybe  need to get this from playbin 
@@ -338,13 +361,14 @@ http_handler_playback_info(raop_conn_t *conn, http_request_t *request, http_resp
         return;
     }      
 
-    playback_info.num_loaded_time_ranges = 1; 
+    double loaded=playback_info.duration-playback_info.position;
+    playback_info.num_loaded_time_ranges = playback_info.ready_to_play && isfinite(loaded) && loaded>0 ? 1 : 0;
     time_range_t time_ranges_loaded[1];
     time_ranges_loaded[0].start = playback_info.position;
-    time_ranges_loaded[0].duration = playback_info.duration - playback_info.position;
+    time_ranges_loaded[0].duration = isfinite(loaded) && loaded>0 ? loaded : 0;
     playback_info.loadedTimeRanges = (void *) &time_ranges_loaded;
 
-    playback_info.num_seekable_time_ranges = 1;
+    playback_info.num_seekable_time_ranges = playback_info.ready_to_play && isfinite(playback_info.seek_duration) && playback_info.seek_duration>0 ? 1 : 0;
     time_range_t time_ranges_seekable[1];
     time_ranges_seekable[0].start = playback_info.seek_start;
     time_ranges_seekable[0].duration = playback_info.seek_duration;
@@ -704,6 +728,7 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
     logger_log(raop->logger, LOGGER_DEBUG, "http_handler_play");
 
     const char* apple_session_id = http_request_get_header(request, "X-Apple-Session-ID");
+    if (!apple_session_id) apple_session_id=conn->client_session_id;
     if (!apple_session_id) apple_session_id="00000000-0000-4000-8000-000000000001";
     if(strlen(apple_session_id)!=36)goto play_error;
     int request_datalen=0;
@@ -918,6 +943,7 @@ http_handler_play(raop_conn_t *conn, http_request_t *request, http_response_t *r
     return;
 
  play_error:;
+    if(raop->callbacks.on_video_protocol)raop->callbacks.on_video_protocol(raop->callbacks.cls,2);
     plist_mem_free(playback_location);
     if (req_root_node) {
         plist_free(req_root_node);

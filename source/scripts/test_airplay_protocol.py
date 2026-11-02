@@ -3,9 +3,10 @@
 Needs C compiler, make and OpenSSL headers/library; no PS4 APIs are invoked.
 """
 from pathlib import Path
-import os,subprocess
+import os,subprocess,json
 r=Path(__file__).resolve().parents[1]
 os.chdir(r)
+os.environ["UBSAN_OPTIONS"]="halt_on_error=1:print_stacktrace=1"
 base=Path(os.environ.get('PS4_AIRPLAY_PORT',r.parent/'work/airplay-port')).absolute()
 b=r/'build/release';b.mkdir(parents=True,exist_ok=True)
 plist=b/'plist';plist.mkdir(exist_ok=True)
@@ -24,4 +25,21 @@ for src in sources:
  obj=b/(str(src.relative_to(vendor)).replace('/','_')+'.o');objects.append(obj)
  run([cc,*flags,*includes,'-c',src,'-o',obj])
 run([cc,*flags,*includes,'tests/test_airplay_server.c',*objects,plist/'src/.libs/libplist-2.0.a','-L'+str(ssl/'lib'),'-lcrypto','-lpthread','-lm','-o',b/'test-airplay-server'])
+run([cc,*flags,*includes,'tests/test_http_response.c',b/'http_response.c.o','-o',b/'test-http-response'])
+run([b/'test-http-response'])
+run([cc,*flags,*includes,'-DMDNS_SOURCE=\"'+str(vendor/'mdnsd/mdnsd.c')+'\"','tests/test_mdns_lifecycle.c','-lpthread','-o',b/'test-mdns-lifecycle'])
+run([b/'test-mdns-lifecycle'])
+run([cc,*flags,*includes,'tests/test_fp_control.c',b/'fp_control.c.o',*[obj for obj in objects if obj.name.startswith('playfair_')],'-L'+str(ssl/'lib'),'-lcrypto','-lm','-o',b/'test-fp-control'])
+for row in json.loads(Path('tests/fixtures/control.json').read_text())['sessions']:
+ run([b/'test-fp-control',row['m3'],row['wrapping_key'],row['mac_key'],row['envelope'],row['material']])
 run(['python3','tests/test_airplay_protocol.py'])
+
+run(['go','build','-o',b/'control-client','tests/control_client.go'])
+run(['python3','tests/test_control_protocol.py'])
+host=base/'build/ffmpeg-video-direct-host'
+engine_includes=includes+['-Iinclude','-I'+str(base.parent/'research/ffmpeg-7.1.2'),'-I'+str(host)]
+engine_objects=[]
+for name in ['direct_player','media_io','tls_http']:
+ obj=b/('engine-'+name+'.o');run([cc,*flags,*engine_includes,'-c','src/'+name+'.c','-o',obj]);engine_objects.append(obj)
+run([cc,*flags,*engine_includes,'tests/test_engine_control_server.c','tests/direct_host_shim.c',*engine_objects,*objects,plist/'src/.libs/libplist-2.0.a',host/'libavformat/libavformat.a',host/'libavcodec/libavcodec.a',host/'libswscale/libswscale.a',host/'libswresample/libswresample.a',host/'libavutil/libavutil.a','-L'+str(ssl/'lib'),'-lssl','-lcrypto','-lcurl','-lpthread','-lm','-o',b/'test-engine-control-server'])
+run(['python3','tests/test_engine_controls.py'])

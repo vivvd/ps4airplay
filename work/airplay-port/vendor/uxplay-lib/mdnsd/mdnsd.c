@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifndef WIN32
 #include <ifaddrs.h>
@@ -37,7 +38,7 @@ const char *mdnsd_last_stage(void){return mdns_stage;}
 #define MDNS_PORT 5353
 #define MDNS_MAX_PACKET 1500
 #define MDNS_COMBINED_PACKET_MAX 1200
-#define MDNS_TTL_HOST 120
+#define MDNS_TTL_HOST MDNSD_TTL_SERVICE
 
 #define DNS_TYPE_A 1
 #define DNS_TYPE_AAAA 28
@@ -933,6 +934,9 @@ static void mdns_handle_query(mdnsd_t *mdnsd, const unsigned char *bytes,
 static THREAD_RETVAL mdns_thread(void *arg)
 {
     mdnsd_t *mdnsd = arg;
+    struct timespec stamp;
+    clock_gettime(CLOCK_MONOTONIC, &stamp);
+    time_t refresh_at = stamp.tv_sec + MDNSD_REFRESH_SECONDS;
 
     for (;;) {
         fd_set rfds;
@@ -953,6 +957,13 @@ static THREAD_RETVAL mdns_thread(void *arg)
             break;
         }
 
+        clock_gettime(CLOCK_MONOTONIC, &stamp);
+        if (stamp.tv_sec >= refresh_at) {
+            MUTEX_LOCK(mdnsd->mutex);
+            if (mdnsd->running) mdns_announce_locked(mdnsd, MDNSD_TTL_SERVICE);
+            MUTEX_UNLOCK(mdnsd->mutex);
+            refresh_at = stamp.tv_sec + MDNSD_REFRESH_SECONDS;
+        }
         FD_ZERO(&rfds);
         if (fd4 != -1) {
             FD_SET(fd4, &rfds);

@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build/ps4'
 STAGE = BUILD / 'stage'
 CONTENT = 'IV0000-ARPL00001_00-RECEIVERLAB00001'
-PACKAGE_VERSION = '1.00'
+PACKAGE_VERSION = '1.12'
 
 def run(*args, cwd=ROOT):
     subprocess.run([str(a) for a in args], cwd=cwd, check=True)
@@ -43,9 +43,10 @@ for target in runtime_files:
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
 port = required('PS4_AIRPLAY_PORT')
-ff = port / 'build/ffmpeg-video-fast'
+if not (port / 'build/crypto/libssl.a').is_file():run('python3',ROOT / 'scripts/build_tls.py')
+ff = port / 'build/ffmpeg-video-direct'
 objects = []
-for name in ('state', 'http', 'render', 'main_ps4', 'audio_receiver', 'socket_compat', 'hen_bridge', 'session_trace', 'airplay_threads', 'video_receiver', 'video_profile', 'video_pacer', 'now_playing', 'player_ui', 'direct_player'):
+for name in ('state', 'http', 'render', 'main_ps4', 'audio_receiver', 'socket_compat', 'hen_bridge', 'session_trace', 'airplay_threads', 'video_receiver', 'video_profile', 'video_pacer', 'now_playing', 'player_ui', 'direct_player', 'media_io', 'tls_http'):
     obj = BUILD / (name + '.o')
     run(cc, '--target=x86_64-pc-freebsd12-elf', '-std=c11', '-D_DEFAULT_SOURCE', '-DLAB_PS4',
         '-fPIC', '-funwind-tables', '-fno-stack-protector', '-O2', '-g',
@@ -63,14 +64,15 @@ run(ld, '-m', 'elf_x86_64', '-pie', '--script', sdk / 'link.x', '--eh-frame-hdr'
     '--gc-sections', '-z', 'max-page-size=0x4000', '-L', sdk / 'lib',
     *objects, sdk / 'lib/crt1.o',
     '--wrap=bind', '--wrap=connect', '--wrap=sendto',
-    '--start-group', port / 'build/core/libairplay.a', port / 'build/crypto/libcrypto.a',
+    '--start-group', port / 'build/core/libairplay.a', port / 'build/crypto/libssl.a', port / 'build/crypto/libcrypto.a',
     port / 'build/plist/src/.libs/libplist-2.0.a',
-    ff / 'libavcodec/libavcodec.a', ff / 'libswscale/libswscale.a',
+    ff / 'libavformat/libavformat.a', ff / 'libavcodec/libavcodec.a', ff / 'libswscale/libswscale.a',
     ff / 'libswresample/libswresample.a', ff / 'libavutil/libavutil.a',
     '--end-group', '-lSceSysmodule', '-lc', '-lkernel', '-lSceVideoOut',
-    '-lSceNet', '-lSceAudioOut', '-lScePad', '-lSceUserService', '-lSceNetCtl', '-o', elf)
+    '-lSceSystemService', '-lSceNet', '-lSceAudioOut', '-lScePad', '-lSceUserService', '-lSceNetCtl', '-o', elf)
 run(fself, '-in=' + str(elf), '-out=' + str(BUILD / 'receiver.oelf'),
     '--eboot', STAGE / 'eboot.bin', '--paid', '0x3800000000000011')
+shutil.copyfile(ROOT / 'assets/airplay-test.mp4', STAGE / 'airplay-test.mp4')
 shutil.copyfile(ROOT / 'assets/icon0.png', STAGE / 'sce_sys/icon0.png')
 sfo = STAGE / 'sce_sys/param.sfo'
 if sfo.exists(): sfo.unlink()
@@ -79,7 +81,7 @@ fields = [
     ('APP_TYPE', 'Integer', 4, '1'), ('APP_VER', 'Utf8', 8, PACKAGE_VERSION),
     ('ATTRIBUTE', 'Integer', 4, '0'), ('CATEGORY', 'Utf8', 4, 'gd'),
     ('CONTENT_ID', 'Utf8', 48, CONTENT), ('DOWNLOAD_DATA_SIZE', 'Integer', 4, '0'),
-    ('SYSTEM_VER', 'Integer', 4, '0'), ('TITLE', 'Utf8', 128, 'PS4 AirPlay RC1'),
+    ('SYSTEM_VER', 'Integer', 4, '0'), ('TITLE', 'Utf8', 128, 'PS4 AirPlay RC13'),
     ('TITLE_ID', 'Utf8', 12, 'ARPL00001'), ('VERSION', 'Utf8', 8, PACKAGE_VERSION),
 ]
 for name, kind, size, value in fields:
@@ -97,7 +99,7 @@ ET.SubElement(chunk_list, 'chunk', id='0', label='Chunk #0')
 scenarios = ET.SubElement(chunks, 'scenarios', default_id='0')
 ET.SubElement(scenarios, 'scenario', id='0', type='sp', initial_chunk_count='1', label='Scenario #0').text = '0'
 files = ET.SubElement(gp4, 'files', img_no='0')
-for name in ('eboot.bin', 'sce_sys/param.sfo', 'sce_sys/icon0.png', *runtime_files):
+for name in ('eboot.bin', 'airplay-test.mp4', 'sce_sys/param.sfo', 'sce_sys/icon0.png', *runtime_files):
     ET.SubElement(files, 'file', targ_path=name, orig_path=str(STAGE / name))
 rootdir = ET.SubElement(gp4, 'rootdir')
 sysdir = ET.SubElement(rootdir, 'dir', targ_name='sce_sys')
@@ -120,11 +122,11 @@ if '[ERROR]' in validation.stdout or '[WARN]' in validation.stdout or '[OK]' not
 # actual inner filesystem, not just staging or the GP4 file list.
 with tempfile.TemporaryDirectory(prefix='pkg-check-', dir=BUILD) as temp:
     run(pkgtool, 'pkg_extract', result, temp)
-    for name in ('eboot.bin', *runtime_files):
+    for name in ('eboot.bin', 'airplay-test.mp4', *runtime_files):
         unpacked = Path(temp) / 'uroot' / name
         if not unpacked.is_file() or unpacked.read_bytes() != (STAGE / name).read_bytes():
             raise SystemExit(f'Package payload missing or changed: {name}')
-destination = ROOT.parent / 'PS4-AirPlay-1.00-RC1.pkg'
+destination = ROOT.parent / 'PS4-AirPlay-1.12-RC13.pkg'
 shutil.copyfile(result, destination)
 print('Built and structurally validated:', destination)
 print('PS4 hardware installation/run still unverified.')

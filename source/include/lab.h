@@ -2,7 +2,7 @@
 #define RECEIVER_LAB_H
 #include <stdint.h>
 #include <stddef.h>
-#define LAB_VERSION "1.00-RC1"
+#define LAB_VERSION "1.12-RC13"
 #define LAB_WIDTH 1920
 #define LAB_HEIGHT 1080
 #define LAB_LOG_SIZE 6144
@@ -13,7 +13,8 @@ typedef struct {
     unsigned long connections;
     int video_rc, audio_rc, pad_rc, net_rc, decoder_module;
     int airplay_started, airplay_step, pending_airplay_step;
-    int show_status;
+    int show_status,pending_direct_test;
+    int language, settings_open, settings_item; /* 0 English, 1 Russian */
     int video_profile,video_pending_profile;
     int video_profile_save_rc;
     char video_profile_save_stage[24];
@@ -24,6 +25,10 @@ typedef struct {
     int video_stream_active,video_cpu_flags;
     unsigned video_width,video_height,video_queue_bytes;
     unsigned long metadata_packets,cover_images,metadata_errors;
+    unsigned direct_allocation_size,direct_allocation_alignment;int direct_allocation_error;
+    int direct_stream_module,direct_io_error;unsigned long direct_io_reads,direct_io_bytes;
+    char direct_stage[32],direct_native_log[2048],direct_protocol_log[2048];
+    unsigned long direct_play_requests,direct_play_rejected,direct_reverse_requests,direct_action_requests,direct_info_requests;
     int direct_available,direct_active,direct_error,direct_event;
     unsigned long direct_video_frames,direct_audio_frames,direct_errors;
     double direct_position,direct_duration;

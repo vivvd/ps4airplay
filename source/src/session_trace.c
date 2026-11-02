@@ -25,7 +25,7 @@ static int enabled;
 
 void lab_session_trace(const char *phase,const char *detail) {
     pthread_mutex_lock(&trace_mutex);
-    if(enabled && written<65536){
+    if(enabled && (written<65536 || (phase && detail && !strcmp(phase,"session") && !strcmp(detail,"clean stop")))){
         char line[240];
         int n=snprintf(line,sizeof(line),"%.48s: %.160s\n",phase?phase:"?",detail?detail:"");
         if(n>0 && n<(int)sizeof(line)){

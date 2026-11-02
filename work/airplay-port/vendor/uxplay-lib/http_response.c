@@ -23,6 +23,7 @@
 struct http_response_s {
     int complete;
     int disconnect;
+    int status, empty_http, has_length, rtsp, has_type;
 
     char *data;
     int buffer_size;
@@ -72,6 +73,8 @@ void
 http_response_init(http_response_t *response, const char *protocol, int code, const char *message)
 {
     assert(response);
+    response->status=code;response->complete=0;response->has_length=0;response->has_type=0;response->rtsp=!strncmp(protocol,"RTSP/",5);
+    response->empty_http=!strncmp(protocol,"HTTP/",5) && code>=200 && code!=204 && code!=304;
     response->data_length = 0;    /* can be used to reinitialize a previously-initialized response */
     char codestr[4] = {0};
 
@@ -94,6 +97,7 @@ void
 http_response_reverse_request_init(http_response_t *request, const char *method, const char *url, const char *protocol)
 {
     assert(request);
+    request->empty_http=0;request->has_length=0;request->has_type=0;request->rtsp=0;request->status=0;
     request->data_length = 0;  /* reinitialize a previously-initialized response as a reverse-HTTP (PTTH/1.0) request */
 
     /* Add first line of response to the data array */
@@ -121,6 +125,8 @@ http_response_add_header(http_response_t *response, const char *name, const char
     assert(name);
     assert(value);
 
+    if (!strcasecmp(name,"Content-Type")) response->has_type=1;
+    if (!strcasecmp(name,"Content-Length")) response->has_length=1;
     http_response_add_data(response, name, strlen(name));
     http_response_add_data(response, ": ", 2);
     http_response_add_data(response, value, strlen(value));
@@ -149,20 +155,10 @@ http_response_finish(http_response_t *response, const char *data, int datalen)
         /* Add data to the end of response */
         http_response_add_data(response, data, datalen);
     } else {
-        /* check for "Content-Type" header, with datalen = 0 */
-        const char *item = "Content-Type";
-        int item_len = strlen(item);
-        const char *part = response->data;
-        int end = response->data_length - item_len;
-        for (int i = 0; i < end; i++) {
-            if (memcmp (part, item, item_len) ==  0) {
-                const char *hdrname = "Content-Length: 0";
-                http_response_add_data(response, hdrname, strlen(hdrname));
-                http_response_add_data(response, "\r\n", 2);
-                break;
-            }
-            part++;
-        }
+        /* RTSP retains its historical framing. HTTP keep-alive needs an
+         * explicit zero length; 101/204/304 must not acquire one. */
+        if ((response->empty_http || (response->rtsp && response->has_type)) && !response->has_length)
+            http_response_add_header(response,"Content-Length","0");
         /* Add extra end of line after headers */
         http_response_add_data(response, "\r\n", 2);
     }
@@ -195,3 +191,5 @@ http_response_get_data(http_response_t *response, int *datalen)
     *datalen = response->data_length;
     return response->data;
 }
+
+int http_response_get_status(http_response_t *response) {return response->status;}

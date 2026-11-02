@@ -7,7 +7,17 @@ BASE=Path(os.environ.get('PS4_AIRPLAY_PORT',ROOT.parent/'work/airplay-port')).ab
 SRC=BASE.parent/'research/ffmpeg-7.1.2'
 host='--host' in sys.argv
 fast='--fast' in sys.argv
-BUILD=BASE/'build'/('ffmpeg-video'+('-fast' if fast else '')+('-host' if host else ''))
+direct='--direct' in sys.argv
+BUILD=BASE/'build'/('ffmpeg-video'+('-direct' if direct else '-fast' if fast else '')+('-host' if host else ''))
+if direct:
+ hls=SRC/'libavformat/hls.c'
+ content=hls.read_text()
+ marker='PS4 native HTTP custom AVIO'
+ if marker not in content:
+  old='    if (!proto_name)\n        return AVERROR_INVALIDDATA;'
+  new='    /* PS4 native HTTP custom AVIO: no FFmpeg socket/TLS protocol is used. */\n    if (!proto_name && (s->flags & AVFMT_FLAG_CUSTOM_IO)) {\n        if (av_strstart(url, "https://", NULL)) proto_name = "https";\n        else if (av_strstart(url, "http://", NULL)) proto_name = "http";\n    }\n    if (!proto_name)\n        return AVERROR_INVALIDDATA;'
+  if old not in content:raise SystemExit('Pinned FFmpeg HLS custom-IO patch did not match')
+  hls.write_text(content.replace(old,new,1))
 BUILD.mkdir(parents=True,exist_ok=True)
 args=[str(SRC/'configure'),'--disable-everything','--disable-programs','--disable-doc',
  '--disable-network','--disable-autodetect','--disable-x86asm','--disable-asm',
@@ -18,6 +28,9 @@ args=[str(SRC/'configure'),'--disable-everything','--disable-programs','--disabl
  '--enable-parser=h264,aac,aac_latm','--disable-iconv','--disable-pthreads',
  '--disable-w32threads','--disable-os2threads','--disable-debug','--disable-stripping',
  '--enable-pic','--disable-runtime-cpudetect','--disable-encoders']
+if direct:
+ args=[a for a in args if a not in ['--disable-avformat','--disable-network']]
+ args+=['--enable-avformat','--enable-network','--enable-demuxer=mov,hls,mpegts,aac','--enable-bsf=aac_adtstoasc,h264_mp4toannexb,extract_extradata','--enable-protocol=crypto,data']
 if not host:
  sdk=Path(os.environ['OO_PS4_TOOLCHAIN']).absolute()
  ar=os.environ.get('PS4_AR','/opt/homebrew/opt/llvm/bin/llvm-ar')

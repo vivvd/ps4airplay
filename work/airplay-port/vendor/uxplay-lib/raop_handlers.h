@@ -551,46 +551,29 @@ raop_handler_fpsetup(raop_conn_t *conn,
                      http_request_t *request, http_response_t *response,
                      char **response_data, int *response_datalen)
 {
-    raop_t *raop = conn->raop;  
-    const unsigned char *data = NULL;
-    int datalen = 0;
-
-    data = (unsigned char *) http_request_get_data(request, &datalen);
-    if (datalen == 16) {
-        if (data[4] != 0x03) {
-            logger_log(raop->logger, LOGGER_ERR, " Client sent an unsupported type 0x%02x FairPlay challenge:\n"
-            "Only type 0x03 can be handled using publically-available information", data[4]);
-            http_response_init(response, "RTSP/1.0", 501, "Not Implemented");
-            return;
-        }  
-
-        *response_data = calloc(142, sizeof(char));
-        if (*response_data) {
-            http_response_add_header(response, "Content-Type", "application/octet-stream");
-            if (!fairplay_setup(conn->fairplay, data, (unsigned char *) *response_data)) {
-                *response_datalen = 142;
-            } else {
-                // Handle error?
-                free(*response_data);
-                *response_data = NULL;
-            }
-        }
-    } else if (datalen == 164) {
-        *response_data = calloc(32, sizeof(char));
-        if (*response_data) {
-            http_response_add_header(response, "Content-Type", "application/octet-stream");
-            if (!fairplay_handshake(conn->fairplay, data, (unsigned char *) *response_data)) {
-                *response_datalen = 32;
-            } else {
-                // Handle error?
-                free(*response_data);
-                *response_data = NULL;
-            }
-        }
-    } else {
-        logger_log(raop->logger, LOGGER_ERR, "Invalid fp-setup data length");
-        return;
+    raop_t *raop=conn->raop;
+    const char *protocol=http_request_get_protocol(request);
+    int datalen=0;
+    const unsigned char *data=(const unsigned char *)http_request_get_data(request,&datalen);
+    /* Only structural metadata enters the report, never challenge/key bytes. */
+    if(raop->callbacks.on_protocol_trace){
+        char label[112];snprintf(label,sizeof(label),"FP setup: bytes=%d version=%d mode=%d",datalen,
+                                data && datalen>=5?data[4]:-1,data && datalen==16?data[14]:-1);
+        raop->callbacks.on_protocol_trace(raop->callbacks.cls,label);
     }
+    if(!data || (datalen!=16 && datalen!=164) || memcmp(data,"FPLY",4)){
+        http_response_init(response,protocol,400,"Invalid setup message");return;
+    }
+    if(data[4]!=3){http_response_init(response,protocol,501,"Unsupported setup version");return;}
+    if(datalen==16 && data[14]>3){http_response_init(response,protocol,400,"Invalid setup mode");return;}
+    int size=datalen==16?142:32;
+    *response_data=calloc((size_t)size,1);
+    if(!*response_data){http_response_init(response,protocol,500,"Allocation failed");return;}
+    int rc=datalen==16?fairplay_setup(conn->fairplay,data,(unsigned char *)*response_data):
+                      fairplay_handshake(conn->fairplay,data,(unsigned char *)*response_data);
+    if(rc){free(*response_data);*response_data=NULL;http_response_init(response,protocol,400,"Setup failed");return;}
+    *response_datalen=size;
+    http_response_add_header(response,"Content-Type","application/octet-stream");
 }
 
 static void

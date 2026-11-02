@@ -17,3 +17,8 @@ void direct_shutdown(void);
 void lab_audio_direct_mode(int active);
 unsigned lab_audio_direct_space(void);
 void lab_audio_direct_pcm(const int16_t *pcm,unsigned frames);
+
+void direct_protocol(void *cls,int event);
+void direct_protocol_trace(void *cls,const char *label);
+
+void direct_test(int mode);

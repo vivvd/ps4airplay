@@ -63,6 +63,8 @@ static size_t json_string(const char *in, char *out, size_t cap) {
 size_t lab_report(const LabState *s, char *out, size_t cap) {
     if (!cap) return 0;
     char log_json[LAB_LOG_SIZE * 6], fw[300], ip[300], platform[150];
+    char protocol_json[12400];json_string(s->direct_protocol_log,protocol_json,sizeof(protocol_json));
+    char native_json[12400];json_string(s->direct_native_log,native_json,sizeof(native_json));
     json_string(s->log, log_json, sizeof(log_json));
     json_string(s->firmware, fw, sizeof(fw));
     json_string(s->ip, ip, sizeof(ip));
@@ -70,7 +72,7 @@ size_t lab_report(const LabState *s, char *out, size_t cap) {
     int n = snprintf(out, cap,
         "{\"app\":\"PS4 AirPlay\",\"version\":\"%s\","
         "\"platform\":\"%s\",\"firmware\":\"%s\",\"ip\":\"%s\","
-        "\"airplay_ready\":%s,\"h264_decode_tested\":%s,"
+        "\"language\":\"%s\",\"airplay_ready\":%s,\"h264_decode_tested\":%s,"
         "\"video_profile\":%d,\"video_pending_profile\":%d,"
         "\"video_profile_save_rc\":%d,\"video_profile_save_stage\":\"%s\", "
         "\"video_output_width\":1920,\"video_output_height\":1080,"
@@ -83,6 +85,12 @@ size_t lab_report(const LabState *s, char *out, size_t cap) {
         "\"video_stream_active\":%s,\"video_cpu_flags\":%d,"
         "\"video_width\":%u,\"video_height\":%u,\"video_queue_bytes\":%u,"
         "\"metadata_packets\":%lu,\"cover_images\":%lu,\"metadata_errors\":%lu,"
+        "\"direct_allocation_size\":%u,\"direct_allocation_alignment\":%u,\"direct_allocation_error\":%d,"
+        "\"direct_stream_module\":%d,\"direct_io_error\":%d,\"direct_io_reads\":%lu,\"direct_io_bytes\":%lu,"
+        "\"direct_backend\":\"ffmpeg\",\"direct_protocol_log\":\"%s\","
+        "\"direct_native_log\":\"%s\", "
+        "\"direct_stage\":\"%s\",\"direct_play_requests\":%lu,\"direct_play_rejected\":%lu,"
+        "\"direct_reverse_requests\":%lu,\"direct_action_requests\":%lu,\"direct_info_requests\":%lu,"
         "\"direct_available\":%d,\"direct_active\":%d,\"direct_error\":%d,\"direct_event\":%d,"
         "\"direct_video_frames\":%lu,\"direct_audio_frames\":%lu,\"direct_errors\":%lu,"
         "\"direct_position\":%.3f,\"direct_duration\":%.3f,"
@@ -94,7 +102,7 @@ size_t lab_report(const LabState *s, char *out, size_t cap) {
         "\"decoder_module\":%d,\"decoder_exports\":%d,"
         "\"tone_runs\":%d,\"pattern\":%s,\"frames\":%lu,\"requests\":%lu,"
         "\"log\":\"%s\"}\n",
-        LAB_VERSION, platform, fw, ip, s->airplay_started ? "true" : "false",
+        LAB_VERSION, platform, fw, ip, s->language ? "ru" : "en", s->airplay_started ? "true" : "false",
         s->video_decoded ? "true" : "false",
         s->video_profile,s->video_pending_profile,s->video_profile_save_rc,s->video_profile_save_stage,s->video_copy_us,s->video_pacing_us,s->video_pacer_resets,
         s->video_packets,s->video_decoded,s->video_errors,s->video_dropped,s->video_presented,
@@ -103,6 +111,9 @@ size_t lab_report(const LabState *s, char *out, size_t cap) {
         s->video_stream_active ? "true" : "false",s->video_cpu_flags,
         s->video_width,s->video_height,s->video_queue_bytes,
         s->metadata_packets,s->cover_images,s->metadata_errors,
+        s->direct_allocation_size,s->direct_allocation_alignment,s->direct_allocation_error,
+        s->direct_stream_module,s->direct_io_error,s->direct_io_reads,s->direct_io_bytes,
+        protocol_json,native_json,s->direct_stage,s->direct_play_requests,s->direct_play_rejected,s->direct_reverse_requests,s->direct_action_requests,s->direct_info_requests,
         s->direct_available,s->direct_active,s->direct_error,s->direct_event,
         s->direct_video_frames,s->direct_audio_frames,s->direct_errors,s->direct_position,s->direct_duration,
         s->recovery_mode ? "true" : "false",

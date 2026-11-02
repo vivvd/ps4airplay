@@ -26,6 +26,7 @@ void http_response_reverse_request_init(http_response_t *request, const char *me
                                         const char *protocol);
 
 void http_response_add_header(http_response_t *response, const char *name, const char *value);
+int http_response_get_status(http_response_t *response);
 void http_response_finish(http_response_t *response, const char *data, int datalen);
 
 void http_response_set_disconnect(http_response_t *response, int disconnect);

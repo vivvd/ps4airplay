@@ -35,6 +35,9 @@ struct httpd_callbacks_s {
                        int remotelen, unsigned int zone_id);
     void  (*conn_request)(void *ptr, http_request_t *request, http_response_t **response);
     void  (*conn_destroy)(void *ptr);
+    int (*conn_read)(void *ptr,int fd,void *out,size_t capacity);
+    int (*conn_write)(void *ptr,int fd,const void *data,size_t length);
+    void (*conn_response_sent)(void *ptr);
 };
 typedef struct httpd_callbacks_s httpd_callbacks_t;
 bool httpd_nohold(httpd_t *httpd);
@@ -49,6 +52,7 @@ const char *httpd_get_connection_typename (connection_type_t type);
 void *httpd_get_connection_by_type (httpd_t *httpd, connection_type_t type, int instance);
 httpd_t *httpd_init(logger_t *logger, httpd_callbacks_t *callbacks, int  nohold);
 
+int httpd_send(httpd_t *httpd,int fd,const void *data,size_t length);
 int httpd_is_running(httpd_t *httpd);
 
 int httpd_start(httpd_t *httpd, unsigned short *port);

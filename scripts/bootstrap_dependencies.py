@@ -62,6 +62,12 @@ def main():
             destination.parent.mkdir(parents=True, exist_ok=True)
             with bundle.open(entry) as source, destination.open('wb') as output:
                 shutil.copyfileobj(source, output)
+            # Historical source ZIPs flattened Unix execute bits. Restore
+            # source scripts so configure/make can invoke their helpers.
+            with destination.open('rb') as check:
+                script = check.read(2) == b'#!'
+            if script:
+                destination.chmod(destination.stat().st_mode | 0o111)
             count += 1
     if not count:
         raise SystemExit('No dependency files found')

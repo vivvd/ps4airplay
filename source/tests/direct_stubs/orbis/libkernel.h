@@ -12,3 +12,5 @@ int sceKernelMunmap(void *,size_t);
 int sceKernelReleaseDirectMemory(off_t,size_t);
 int sceKernelGetModuleList(int *,size_t,size_t *);
 int sceKernelDlsym(int,const char *,void **);
+
+uint32_t sceKernelLoadStartModule(const char *,size_t,const void *,uint32_t,void *,void *);

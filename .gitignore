@@ -12,3 +12,5 @@ work/airplay-port/prefix/
 *.pem
 *.key
 ps4-receiver-report*.json
+# Public Mozilla roots; all other PEM/key files remain ignored.
+!source/assets/cacert.pem

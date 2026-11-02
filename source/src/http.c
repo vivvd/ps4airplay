@@ -2,6 +2,7 @@
 #include "lab.h"
 #include "video_profile.h"
 #include "web_page.h"
+#include "test_video.h"
 #include <sys/socket.h>
 #include <sys/select.h>
 #include <netinet/in.h>
@@ -17,7 +18,7 @@
 
 #define CLIENTS 4
 #define REQUEST_CAP 4096
-#define RESPONSE_CAP 45000
+#define RESPONSE_CAP 320000
 static int listener = -1;
 static struct Client {
     int fd;
@@ -111,6 +112,33 @@ static int header(const char *request, const char *name, char *out, size_t cap) 
     }
     return found;
 }
+static void video_file(struct Client *c,int head) {
+    unsigned long long size=sizeof(airplay_test_video),first=0,last=size-1;int partial=0;
+    char range[160];
+    if(header(c->request,"Range",range,sizeof(range))<0){respond(c,400,"text/plain","Invalid range\n",0);return;}
+    if(range[0]){
+        char tail[2];unsigned long long a=0,b=0;int consumed=0;
+        if(sscanf(range,"bytes=%llu-%llu%n",&a,&b,&consumed)==2 && !range[consumed]){first=a;last=b;}
+        else if(sscanf(range,"bytes=%llu-%n",&a,&consumed)==1 && consumed>0 && !range[consumed])first=a;
+        else if(sscanf(range,"bytes=-%llu%1s",&a,tail)==1 && a>0){first=a>=size?0:size-a;}
+        else goto invalid;
+        if(first>=size || last<first)goto invalid;
+        if(last>=size)last=size-1;
+        partial=1;
+    }
+    {
+        char content_range[128]="";
+        if(partial)snprintf(content_range,sizeof(content_range),"Content-Range: bytes %llu-%llu/%llu\r\n",first,last,size);
+        int n=snprintf(c->response,sizeof(c->response),"HTTP/1.1 %s\r\nContent-Type: video/mp4\r\nCache-Control: no-store\r\nAccept-Ranges: bytes\r\n%sContent-Length: %llu\r\nConnection: close\r\n\r\n",partial?"206 Partial Content":"200 OK",content_range,last-first+1);
+        if(n<0 || (size_t)n+last-first+1>sizeof(c->response)){respond(c,400,"text/plain","Video too large\n",0);return;}
+        c->length=(size_t)n;
+        if(!head){memcpy(c->response+n,airplay_test_video+first,(size_t)(last-first+1));c->length+=(size_t)(last-first+1);}
+        return;
+    }
+invalid:
+    c->length=(size_t)snprintf(c->response,sizeof(c->response),"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */%llu\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",size);
+}
+
 static void route(LabState *s, struct Client *c) {
     char method[12], path[256], protocol[16], extra[2];
     char host[160], origin[200], expected[180], length[32], transfer[32];
@@ -125,6 +153,7 @@ static void route(LabState *s, struct Client *c) {
         header(c->request, "Transfer-Encoding", transfer, sizeof(transfer)) != 0) goto bad;
     if (length[0] && strcmp(length, "0")) goto bad;
     ++s->requests;
+    if ((!strcmp(method,"GET") || !strcmp(method,"HEAD")) && !strncmp(path,"/test-video.mp4",15) && (!path[15] || path[15]=='?')){video_file(c,!strcmp(method,"HEAD"));return;}
     if (!strcmp(method, "GET")) {
         if (!strcmp(path, "/")) respond(c, 200, "text/html; charset=utf-8", lab_web_page, 0);
         else if (!strcmp(path, "/api/status") || !strcmp(path, "/api/report")) {
@@ -136,12 +165,22 @@ static void route(LabState *s, struct Client *c) {
         if (origin[0] && strcmp(origin, expected)) {
             respond(c, 403, "text/plain", "Cross-origin commands are disabled\n", 0); return;
         }
-        if (!strncmp(path,"/api/video-profile/",19)) {
+        if (!strcmp(path,"/api/language/en") || !strcmp(path,"/api/language/ru")) {
+            s->language=!strcmp(path,"/api/language/ru");
+        } else if (!strncmp(path,"/api/video-profile/",19)) {
             int mode=lab_video_profile_id(path+19);
             if(mode<0){respond(c,400,"text/plain","Unknown video profile\n",0);return;}
             if(lab_video_profile_save(s,mode)!=0){respond(c,500,"text/plain","Cannot save video profile\n",0);return;}
         } else if (!strcmp(path, "/api/airplay-step")) {
             s->pending_airplay_step=1;lab_log(s,"AirPlay startup step requested");
+        } else if (!strcmp(path,"/api/direct-test-local")){
+            s->pending_direct_test=1;
+        } else if (!strcmp(path,"/api/direct-test-ex")){
+            s->pending_direct_test=3;
+        } else if (!strcmp(path,"/api/direct-test-local-ex")){
+            s->pending_direct_test=4;
+        } else if (!strcmp(path,"/api/direct-test")){
+            s->pending_direct_test=2;lab_log(s,"Built-in native video test requested");
         } else if (!strcmp(path, "/api/tone")) {
             s->pending_tone = 1; lab_log(s, "Tone requested from browser");
         } else if (!strcmp(path, "/api/pattern")) {

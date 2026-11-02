@@ -59,3 +59,36 @@ Corresponding sources are in work/research/ and work/airplay-port/vendor/ within
   system-language fallback; bounded playlist payloads; server-info feature mask
   matches discovery; invalid playback commands return 400 instead of crashing.
   These patches are supplied in full in work/airplay-port/vendor/uxplay-lib/.
+
+
+## AvPlayer HTTP contexts, 1.01-RC2
+
+AvPlayerPostInitData / sceAvPlayerPostInit signatures are from the same
+shadPS4 avplayer.h/cpp primary implementation cited above. Public structure size
+132 bytes, HTTP/SSL context IDs at offsets 68/72, checked by static assertions.
+The app creates and owns Net, SSL and HTTP contexts; TLS verification stays enabled.
+Error 0x806A0002 was reproduced on the user's PS4 by a direct HTTP play request;
+RC2's new native path has not yet been verified on hardware.
+
+
+## Direct FFmpeg receiver, 1.06-RC7
+
+FFmpeg remains pinned to n7.1.2. The direct build additionally enables libavformat,
+MOV/HLS/MPEG-TS/AAC demuxers and required bitstream filters. HTTP and TLS transport
+are provided through custom AVIO and console HTTP/SSL APIs; certificate checking
+is not disabled. source/patches/ffmpeg-hls-custom-io.patch documents the HLS URL
+recognition change used with custom AVIO. The full source bundle includes the
+modified hls.c and the linked ffmpeg-video-direct static libraries/headers.
+Native AvPlayer code is no longer part of the production direct receiver.
+
+## Verified HTTPS transport (RC11)
+
+OpenSSL libssl 3.5.4 is linked with the existing identical libcrypto 3.5.4 build,
+using a custom socket BIO (no-sock build). New source/scripts/build_tls.py can
+rebuild libssl from the pinned source when it is missing. No newer crypto build
+or global certificate-store changes are required.
+
+Public Mozilla roots: source/assets/cacert.pem, downloaded from
+https://curl.se/ca/cacert.pem, extracted 2026-10-20. SHA256 and count are in
+assets/cacert-source.json; MPL-2.0 text in assets/LICENSE.cacert.txt.
+Only these public roots are embedded; no user/OS private certificate material.

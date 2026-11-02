@@ -13,6 +13,7 @@ static int font_ready;
 static uint32_t *canvas,*art,*layout;
 static unsigned long art_revision,revision=(unsigned long)-1,cache_id;
 static long second=-1;
+static int cached_language=-1,cached_settings=-1,cached_item=-1;
 static int cached_mode=-1,cached_ready=-1,cached_error,cached_playing=-1;
 static struct {uint32_t *ptr;unsigned long id;} targets[2];
 static struct {unsigned code;int size,w,h,x,y,advance;unsigned char *pixels;} glyphs[512];
@@ -90,29 +91,38 @@ void player_ui_draw(const LabState *s,uint32_t *pixels){
     if(!font_ready || !canvas || !art || !layout){memset(pixels,0,LAB_WIDTH*LAB_HEIGHT*4);return;}
     NowPlaying np;np_snapshot(&np,art,&art_revision);
     int mode=s->direct_active?2:np.active?1:0;long sec=(long)np.position;
-    int changed=revision!=np.revision || cached_mode!=mode || cached_ready!=s->airplay_started || cached_error!=s->direct_error || cached_playing!=np.playing;
+    int ru=s->language;
+    int changed=cached_language!=ru || cached_settings!=s->settings_open || cached_item!=s->settings_item || revision!=np.revision || cached_mode!=mode || cached_ready!=s->airplay_started || cached_error!=s->direct_error || cached_playing!=np.playing;
     if(changed){
         backdrop(mode==1 && np.has_art);
         text(160,128,"PS4 AirPlay",30,0xffd7dbe3,1100);
         if(mode==1){
-            cover(np.has_art);text(880,278,np.playing?"СЕЙЧАС ИГРАЕТ":"МУЗЫКА",23,0xffb9c0ca,840);
-            title(np.title[0]?np.title:"Музыка с iPhone",880,385,850);
+            cover(np.has_art);text(880,278,np.playing?(ru?"СЕЙЧАС ИГРАЕТ":"NOW PLAYING"):(ru?"МУЗЫКА":"MUSIC"),23,0xffb9c0ca,840);
+            title(np.title[0]?np.title:(ru?"Музыка с iPhone":"Music from iPhone"),880,385,850);
             text(880,555,np.artist,38,0xffd9dce3,850);text(880,610,np.album,29,0xffaeb5c1,850);
-            text(880,835,"Управление воспроизведением — на iPhone",24,0xff8f98a7,850);
-        }else if(mode==2){text(160,455,"Открываем видео",64,0xfffafafa,1500);text(160,535,"Поток передан с iPhone. Ожидаем изображение…",32,0xffadb6c7,1500);}
+            text(880,835,ru?"Управление воспроизведением — на iPhone":"Control playback on your iPhone",24,0xff8f98a7,850);
+        }else if(mode==2){text(160,455,ru?"Открываем видео":"Opening video",64,0xfffafafa,1500);text(160,535,ru?"Поток передан с iPhone. Ожидаем изображение…":"Stream received from iPhone. Waiting for video…",32,0xffadb6c7,1500);}
         else{
-            text(160,430,s->recovery_mode?"Требуется перезапуск AirPlay":s->airplay_started?"Готов к воспроизведению":"Запускаем AirPlay…",62,0xfffafafa,1600);
-            text(160,520,"Откройте AirPlay на iPhone и выберите PS4 AirPlay",34,0xffbdc5d3,1600);
-            text(160,585,"Музыка · Видео из плеера · Повтор экрана",29,0xff8f9aaf,1600);
-            if(s->direct_error)text(160,680,"Не удалось открыть видео. Попробуйте другой поток.",29,0xfff0b4a6,1600);
+            text(160,430,s->recovery_mode?(ru?"Требуется перезапуск AirPlay":"AirPlay needs to restart"):s->airplay_started?(ru?"Готов к воспроизведению":"Ready to play"):(ru?"Запускаем AirPlay…":"Starting AirPlay…"),62,0xfffafafa,1600);
+            text(160,520,ru?"Откройте AirPlay на iPhone и выберите PS4 AirPlay":"Open AirPlay on iPhone and select PS4 AirPlay",34,0xffbdc5d3,1600);
+            text(160,585,ru?"Музыка · Видео из плеера · Повтор экрана":"Music · Video · Screen Mirroring",29,0xff8f9aaf,1600);
+            if(s->direct_error)text(160,680,ru?"Не удалось открыть видео. Попробуйте другой поток.":"Could not open video. Try another source.",29,0xfff0b4a6,1600);
         }
-        char footer[200];snprintf(footer,sizeof(footer),"%s:%d   ·   SQUARE Диагностика   ·   OPTIONS Выход   ·   %s",s->ip,LAB_PORT,LAB_VERSION);
+        char footer[200];snprintf(footer,sizeof(footer),ru?"%s:%d   ·   SQUARE Диагностика   ·   OPTIONS Настройки   ·   %s":"%s:%d   ·   SQUARE Diagnostics   ·   OPTIONS Settings   ·   %s",s->ip,LAB_PORT,LAB_VERSION);
         text(160,990,footer,23,0xff7f8b9e,1600);
+        if(s->settings_open){
+            rect(400,230,1120,590,0xff18202e);
+            text(470,320,ru?"Настройки":"Settings",50,0xfffafafa,1000);
+            const char *labels[]={ru?"Язык: Русский":"Language: English",ru?"Вернуться":"Back",ru?"Отключить AirPlay и выйти":"Disconnect AirPlay and exit"};
+            for(int i=0;i<3;++i){if(i==s->settings_item)rect(450,365+i*100,1020,80,0xff30485a);text(480,420+i*100,labels[i],34,0xfffafafa,970);}
+            text(470,755,ru?"Вверх/вниз — выбор   X — подтвердить   O — назад":"Up/Down: select   X: confirm   O: back",24,0xffbdc5d3,1000);
+        }
+        cached_language=ru;cached_settings=s->settings_open;cached_item=s->settings_item;
         memcpy(layout,canvas,LAB_WIDTH*LAB_HEIGHT*4);
         revision=np.revision;cached_mode=mode;cached_ready=s->airplay_started;cached_error=s->direct_error;cached_playing=np.playing;
     }
     if(changed || second!=sec){
-        if(mode==1){
+        if(mode==1 && !s->settings_open){
             for(int y=705;y<790;++y)memcpy(canvas+y*LAB_WIDTH+880,layout+y*LAB_WIDTH+880,850*4);
             rect(880,722,850,5,0xff505560);if(np.duration>0){double fraction=np.position/np.duration;if(fraction<0)fraction=0;if(fraction>1)fraction=1;rect(880,722,(int)(850*fraction),5,0xfff1f2f5);}
             char label[32];time_label(label,sizeof(label),np.position);text(880,770,label,25,0xffc1c6cf,200);

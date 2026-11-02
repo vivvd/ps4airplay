@@ -10,17 +10,89 @@ try:
   if p.poll() is not None:raise RuntimeError('Server failed; see log')
   time.sleep(.01)
  else:raise RuntimeError('No READY')
- def request(method,path,body=b'',content='text/parameters',session=True):
+ def request(method,path,body=b'',content='text/parameters',session=True,cseq=False):
   c=http.client.HTTPConnection('127.0.0.1',port,timeout=5)
   headers={'Content-Type':content}
+  if cseq:headers['CSeq']='1'
   if session:headers['X-Apple-Session-ID']='11111111-1111-4111-8111-111111111111'
-  c.request(method,path,body,headers);r=c.getresponse();data=r.read(int(r.getheader("Content-Length","0")));status=r.status;c.close();return status,data
+  c.request(method,path,body,headers);r=c.getresponse();data=r.read();status=r.status;c.close();return status,data
+ # Browser discovery and playback share a keep-alive connection. Discovery
+ # has no session header; the real session appears only on a later request.
+ c=http.client.HTTPConnection('127.0.0.1',port,timeout=2)
+ c.request('GET','/server-info');reply=c.getresponse()
+ assert reply.status==200 and 'features' in plistlib.loads(reply.read())
+ wire=c.sock
+ # Safari's HTTP negotiation must return the actual binary messages, not an
+ # empty 200. Exercise both stages on this discovery connection before its ID.
+ for mode in range(4):
+  setup=bytearray.fromhex('46504c590301010000000004020000bb');setup[14]=mode
+  c.request('POST','/fp-setup',bytes(setup),{'Content-Type':'application/octet-stream'})
+  reply=c.getresponse();assert reply.status==200;assert reply.getheader('Content-Type')=='application/octet-stream'
+  message=reply.read();assert len(message)==142 and message[:12]==bytes.fromhex('46504c590301020000000082') and message[13]==mode
+  assert c.sock is wire
+ handshake=bytearray(164);handshake[:12]=bytes.fromhex('46504c590301030000000098');handshake[144:]=bytes(range(20))
+ c.request('POST','/fp-setup',bytes(handshake),{'Content-Type':'application/octet-stream'})
+ reply=c.getresponse();message=reply.read();assert reply.status==200 and len(message)==32
+ assert message[:12]==bytes.fromhex('46504c590301040000000014') and message[12:]==bytes(range(20));assert c.sock is wire
+ h={'X-Apple-Session-ID':'33333333-3333-4333-8333-333333333333','Content-Type':'text/parameters'}
+ c.request('POST','/play',b'Content-Location: https://test.invalid/session.mp4\r\nStart-Position: 0\r\n',h)
+ reply=c.getresponse();assert reply.status==200,reply.reason
+ assert reply.getheader('Content-Length')=='0';assert reply.read()==b'';assert c.sock is wire
+ # Headerless polling after binding must retain the session, without inventing a new ID.
+ c.request('GET','/playback-info');reply=c.getresponse();assert reply.status==200;assert plistlib.loads(reply.read())['readyToPlay']
+ c.request('POST','/rate?value=0',headers=h);reply=c.getresponse();assert reply.status==200;assert reply.read()==b'';assert c.sock is wire
+ c.request('POST','/stop');reply=c.getresponse();assert reply.status==200;assert reply.read()==b''
+ # A genuine change of session is still rejected and the old connection closed.
+ h['X-Apple-Session-ID']='44444444-4444-4444-8444-444444444444'
+ c.request('POST','/stop',headers=h);reply=c.getresponse();assert reply.status==400;assert reply.read()==b'';c.close()
+ # Reconnect normally after a rejected session.
+ assert request('GET','/server-info')[0]==200
+ # Parser-level rejects must produce a complete, framed response and trace.
+ c=http.client.HTTPConnection('127.0.0.1',port,timeout=2)
+ c.request('POST','/stop',headers={**h,'CSeq':'invalid'});reply=c.getresponse();assert reply.status==400;assert reply.read()==b'';c.close()
+ c=http.client.HTTPConnection('127.0.0.1',port,timeout=2)
+ c.request('GET','/server-info',headers={'Long':'x'*1025});reply=c.getresponse();assert reply.status==431;assert reply.read()==b'';c.close()
+ # Malformed setup must report errors rather than an empty success or invalid
+ # memory access. Preserve HTTP status line even for unsupported versions.
+ for body in [b'',b'x',b'FPLY',bytes(16),bytes(164),b'FPLY'+bytes(159),b'FPLY'+bytes(161)]:
+  assert request('POST','/fp-setup',body,'application/octet-stream')[0]==400
+ setup=bytearray.fromhex('46504c590301010000000004020000bb')
+ for mode in [4,127,255]:
+  setup[14]=mode;assert request('POST','/fp-setup',bytes(setup),'application/octet-stream')[0]==400
+ setup[14]=0;setup[4]=5
+ assert request('POST','/fp-setup',bytes(setup),'application/octet-stream')[0]==501
+ assert request('POST','/fp-setup2',b'','application/octet-stream')[0]==403
+ # The shared handler must still support RTSP mirroring negotiation.
+ rtsp=socket.create_connection(('127.0.0.1',port),timeout=2);rf_rtsp=rtsp.makefile('rb')
+ def rtsp_setup(body):
+  rtsp.sendall(b'POST /fp-setup RTSP/1.0\r\nCSeq: 1\r\nContent-Type: application/octet-stream\r\nContent-Length: '+str(len(body)).encode()+b'\r\n\r\n'+body)
+  status=rf_rtsp.readline();headers={}
+  while True:
+   line=rf_rtsp.readline()
+   if line==b'\r\n':break
+   assert line
+   key,value=line.decode().split(':',1);headers[key.lower()]=value.strip()
+  return status,rf_rtsp.read(int(headers.get('content-length','0')))
+ setup[4]=3;status,message=rtsp_setup(bytes(setup));assert status.startswith(b'RTSP/1.0 200') and len(message)==142
+ status,message=rtsp_setup(bytes(handshake));assert status.startswith(b'RTSP/1.0 200') and len(message)==32
+ setup[14]=255;assert rtsp_setup(bytes(setup))[0].startswith(b'RTSP/1.0 400')
+ rf_rtsp.close();rtsp.close()
  # Actual host core HTTP parser + handlers + callback integration.
  assert request('POST','/play',b'Content-Location: https://test.invalid/a.mp4\r\nStart-Position: 0.25\r\n',session=False)[0]==200
  body=plistlib.dumps({'Content-Location':'https://test.invalid/b.mp4','Start-Position-Seconds':8.5},fmt=plistlib.FMT_BINARY)
  assert request('POST','/play',body,'application/x-apple-binary-plist')[0]==200
+ assert request('POST','/play',body,'application/x-apple-binary-plist',cseq=True)[0]==200
  status,data=request('GET','/playback-info');assert status==200
  info=plistlib.loads(data);assert info['duration']==120 and info['position']==12 and info['readyToPlay']
+ for name in ['readyToPlay','playbackBufferEmpty','playbackBufferFull','playbackLikelyToKeepUp']:
+  assert type(info[name]) is bool,(name,info[name])
+ assert info['seekableTimeRanges']==[{'start':0.0,'duration':120.0}]
+ assert info['loadedTimeRanges']==[{'start':12.0,'duration':108.0}]
+ status,data=request('GET','/scrub',session=False);assert status==200
+ values={k:float(v) for k,v in (line.split(':',1) for line in data.decode().splitlines())}
+ assert values=={'duration':120.0,'position':12.0},values
+ assert request('POST','/scrub')[0]==400
+
  assert request('POST','/scrub?position=42')[0]==200
  assert request('POST','/rate?value=0')[0]==200
  assert request('POST','/rate?value=1')[0]==200
@@ -64,10 +136,16 @@ try:
  assert request('POST','/action',empty,'application/x-apple-binary-plist')[0]==400
  rf.close();reverse.close()
  time.sleep(.03);log.flush();log.seek(0);text=log.read()
+ assert 'PROTOCOL HTTP POST /play -> 200' in text,text
+ assert 'PROTOCOL HTTP POST /stop -> 400' in text,text
+ assert 'PROTOCOL HTTP GET /server-info -> 431' in text,text
+ assert all('test.invalid' not in line and '33333333' not in line for line in text.splitlines() if line.startswith('PROTOCOL ')),text
  assert 'FRACTION 0.250 https://test.invalid/a.mp4' in text,text
  assert 'PLAY 8.500 https://test.invalid/b.mp4' in text,text
+ assert 'SEEK 0.000' not in text,text
  assert 'SEEK 42.000' in text and 'RATE 0.000' in text and 'STOP' in text,text
  assert f'PLAY 3.000 http://127.0.0.1:{port}/master.m3u8' in text,text
+ print('Safari HTTP setup: four modes, both binary response stages, same discovery/play socket, malformed lengths/modes/versions, RTSP regression passed')
  print('AirPlay HLS: reverse upgrade, FCUP master/media exchange, localhost rewrite and playlist serving passed')
  print('AirPlay HTTP: legacy play without session/UUID, binary play, fraction/seconds, playback-info, seek/rate/stop and 10 malformed requests passed')
 finally:

@@ -1,87 +1,36 @@
-# PS4 AirPlay 1.00-RC1
+# PS4 AirPlay 1.12-RC13
 
-Самостоятельный приёмник AirPlay для PS4 с HEN, на базе рабочей версии 0.13.
-Новый режим прямого видео и экран музыки готовы к проверке на консоли.
-Это кандидат релиза: локальные тесты не подтверждают работу системного AvPlayer
-на конкретной прошивке или совместимость всех приложений iPhone.
+Standalone PS4 HEN AirPlay receiver based on 0.13. A Mac is needed only to build
+or develop the project, not to receive media.
 
-## Использование
+This candidate adds an English/Russian interface, shared language controls on
+TV and the diagnostics page, and an Options settings menu. Exit now stops
+request callbacks and the direct-video worker before freeing protocol/session
+data, withdraws discovery services, and requests a return to the PS4 shell.
+Discovery uses a renewable 15-second lease to limit stale entries after crashes.
 
-1. Включить HEN, установить PS4-AirPlay-1.00-RC1.pkg поверх прежнего приложения
-   (тот же TITLE_ID ARPL00001), открыть и дождаться «Готов к воспроизведению».
-2. iPhone и PS4 должны быть в одной локальной сети. В списке AirPlay теперь
-   **PS4 AirPlay**. При сохранённом старом подключении отключить и выбрать заново.
-3. Apple Music: включить трек и выбрать PS4 AirPlay. Приложение выводит переданные
-   iPhone название, исполнителя, альбом, JPEG/PNG-обложку и прогресс. Если источник
-   не передаёт обложку/метаданные, показывается нейтральный экран музыки.
-4. Видео: открыть ролик в Safari, нажать **AirPlay в самом видеоплеере** и выбрать
-   PS4 AirPlay. Прямая передача HTTP(S) MP4/HLS использует системный AvPlayer PS4.
-   YouTube обрабатывается через встроенный обратный FCUP-канал и локальный HLS-прокси;
-   фактическое поведение текущего iOS-приложения YouTube ещё не проверено на PS4.
-5. Повтор экрана остаётся отдельным режимом из Пункта управления, как в 0.13.
+Music, mirroring, and Safari video have worked on PS4 13.52 in earlier builds.
+RC13's new Options/exit behavior still needs hardware validation. The unresolved
+00:00 timer on some long videos is not claimed fixed. YouTube is outside the
+current validation scope. DRM, HEVC, and AV1 are unsupported.
 
-DRM-видео не реализовано. Наличие AirPlay-кнопки не гарантирует, что конкретный
-сервис выдаст приёмнику воспроизводимый URL или HLS. Совместимость HTTPS,
-кодеков и профилей зависит от системного AvPlayer данной прошивки.
+Install `PS4-AirPlay-1.12-RC13.pkg` over the previous version with HEN enabled.
+English is the default. Press Options, select Language, and press X to switch to
+Russian. Up/Down selects a menu item; Circle returns. Select Disconnect AirPlay
+and exit to quit cleanly. Language is retained for the current app session.
 
-## Управление
+Diagnostics: `http://PS4-IP:9080/`. Use Download report before restarting a failed
+session. After a crash, reopen and save the report before resuming AirPlay.
+The page has a 12-second H.264/AAC test video and a separate native player test.
+Do not publish personal reports without checking their contents.
 
-- **SQUARE** — показать/скрыть технический экран.
-- **CROSS** — пауза/продолжение прямого видео; **CIRCLE** — остановить его.
-- **OPTIONS** — штатный выход. Музыкой и повтором экрана управляет iPhone.
-- В Safari на iPhone: `http://IP-PS4:9080/` → **Скачать отчёт**.
-  Адрес PS4 показан внизу экрана. При зависании скачать отчёт до перезапуска;
-  при краше открыть приложение снова и сначала скачать отчёт.
+Direct video uses FFmpeg libavformat, software H.264/AAC decoding, native HTTP,
+and verified OpenSSL HTTPS. The direct path does not use Sony AvPlayer/Audiodec.
+It supports MP4, MPEG-TS HLS, and fragmented MP4 with Range, pause, and seek.
+Actual quality and seek availability depend on source metadata and format.
+Some fragmented MP4 streams and high-bitrate videos can stutter.
 
-Профили 1080p30/720p60/720p30 в диагностике относятся к повтору экрана и применяются
-после выхода через OPTIONS и нового запуска. Фактическое разрешение выбирает iPhone.
-Для прямого видео качество определяется переданной ссылкой/плейлистом и AvPlayer.
-
-## Что изменилось относительно 0.13
-
-- Системный AvPlayer, отдельный worker и ограниченная очередь команд URL/start,
-  pause/resume, seek, stop, playback-info. HTTP-поток AirPlay не ждёт открытия видео.
-- Проверенные размеры/смещения ABI, динамическое разрешение API, direct-memory
-  allocator для native-текстур, NV12 → BGRA, отдельный контекст масштабирования.
-- PCM прямого видео проходит через существующий AudioOut FIFO с пересчётом частоты
-  до 48 kHz stereo. RTP-аудио подавляется на время прямого воспроизведения.
-- Прямые Content-Location запросы Safari, бинарные plist и legacy text/parameters;
-  дробный Start-Position не путается с Start-Position-Seconds. HLS/FCUP остаётся
-  внутри PS4; внешний компьютер/прокси для воспроизведения не требуется.
-- Экран музыки 1920×1080: обложка, цветной фон, UTF-8 текст с кириллицей, прогресс.
-  Декодирование обложек вынесено в worker; фон и глифы кэшируются, обновление времени
-  не пересчитывает фон, неизменившиеся кадры не копируются заново.
-- Сохранение профиля использует native Orbis I/O с атомарной заменой и чтением
-  результата (узкий перенос исправления из 0.14; медиатракт остаётся из 0.13).
-- Отчёт содержит direct_available/active/error/event, количество видео/PCM кадров,
-  позицию и длительность, счётчики метаданных и обложек. URL и данные обложки туда
-  не включаются; сообщения со ссылками отбрасываются из журнала адаптера.
-
-## Проверки и границы
-
-На Mac выполнены ASan/UBSan тесты метаданных, декодирования обложки, RTP-progress
-с переполнением timestamp, отрисовки и кэша. Native-player mock проверяет ABI,
-allocators, срок жизни URL, NV12/PCM, дробную стартовую позицию, seek, pause/resume,
-stop и ошибку источника. Он не заменяет системный AvPlayer PS4.
-
-Настоящее patched UxPlay-ядро проверено HTTP-запросами: legacy/binary /play,
-/playback-info, /scrub, /rate, /stop, reverse upgrade, FCUP master/media обмен,
-переписывание локальных URL, выдача HLS-плейлистов, некорректные запросы.
-Также пройдены регрессии H.264/очереди/профилей, HTTP-диагностики, HEN и recovery,
-native Orbis file-I/O mock; PKG проверена 28 проверками и извлечением всех runtime-модулей.
-Ядро и приложение повторно собраны из распакованного source ZIP с включёнными
-static dependencies; полный bootstrap всех сторонних библиотек повторно не выполнялся.
-
-Открытая проверка на PS4: запуск RC1, Apple Music + смена обложки/трека, Safari MP4,
-HLS, пауза/перемотка, YouTube из приложения, возврат к музыке/повтору экрана.
-Работа музыки/повтора экрана подтверждена пользователем для базовой 0.13;
-новые native-видеорежимы и метаданные RC1 на PS4 пока не подтверждены.
-
-## Сборка из source bundle
-
-Bundle содержит `source/` и `work/`: закреплённые исходники зависимостей,
-патченное UxPlay-ядро, заголовки и PS4 static libraries. Инструменты отдельно:
-OpenOrbis 0.5.4, LLVM/LLD, create-fself, PkgTool — см. docs/BUILD-APPLE-SILICON.md.
+Build with OpenOrbis and the complete dependency tree included in this archive:
 
 ```sh
 export OO_PS4_TOOLCHAIN=/absolute/path/OpenOrbis/PS4Toolchain
@@ -94,8 +43,13 @@ python3 source/scripts/build_core.py
 python3 source/scripts/build.py
 ```
 
-`work/airplay-port/ps4-cc` в bundle использует указанные переменные окружения.
-Generated-ресурсы уже включены; их регенерация: scripts/generate_release_assets.py.
-Для host-тестов сначала собрать FFmpeg: scripts/build_video_ffmpeg.py --host --fast;
-затем scripts/test_release.sh и scripts/test_airplay_protocol.py (OpenSSL+make).
-Лицензии и источники: LICENSE, docs/DEPENDENCIES.md, third_party/, assets/fonts/OFL.txt.
+When running from inside `source/`, adjust script paths and set the port path to
+`../work/airplay-port`. See `docs/BUILD-APPLE-SILICON.md` and `docs/DEPENDENCIES.md`.
+The full source archive includes pinned dependency sources, CA bundle/license,
+static libraries, and validation logs; proprietary Sony modules are excluded.
+
+Host checks: `scripts/test_release.sh`, `scripts/test_airplay_protocol.py`,
+`tests/test_diagnostics.py`. They exercise real core/FFmpeg behavior with
+sanitizers, but do not replace a physical iPhone/PS4 check.
+
+GPL-3.0-or-later; third-party components retain their respective licenses.
