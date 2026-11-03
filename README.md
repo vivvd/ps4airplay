@@ -24,7 +24,7 @@ claimed to work. This project does not install or provide HEN.
 
 ## Playback
 
-- **Apple Music:** audio, artwork, title, artist, album, and progress when sent
+- **Music:** audio, artwork, title, artist, album, and progress when sent
   by iPhone. Control playback on your phone.
 - **Screen Mirroring:** select the receiver from Control Center → Screen Mirroring.
 - **Safari video:** use the AirPlay button inside the video player. Direct video
